@@ -1,0 +1,28 @@
+{
+  "projects": [
+    {
+      "id": "m1-three-teams-2026",
+      "name": "アプリ採点",
+      "status": "open",
+      "teams": [
+        { "id": "team-sho", "name": "しょうチーム", "order": 1 },
+        { "id": "team-sakuya", "name": "さくやチーム", "order": 2 },
+        { "id": "team-masato", "name": "まさとチーム", "order": 3 }
+      ],
+      "judges": [
+        { "id": "judge-kaneko", "name": "金子" },
+        { "id": "judge-sugawara", "name": "菅原" },
+        { "id": "judge-gojo", "name": "五条" },
+        { "id": "judge-tachibana", "name": "橘" },
+        { "id": "judge-yoshida", "name": "吉田" },
+        { "id": "judge-kimura", "name": "木村" },
+        { "id": "judge-yokoyama", "name": "横山" },
+        { "id": "judge-iida", "name": "飯田" },
+        { "id": "judge-tajiri", "name": "田尻" },
+        { "id": "judge-okuzumi", "name": "奥隅" },
+        { "id": "judge-hashii", "name": "橋居" },
+        { "id": "judge-motohashi", "name": "本橋" }
+      ]
+    }
+  ]
+}
