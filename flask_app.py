@@ -58,6 +58,11 @@ def admin_page():
     return send_from_directory(ROOT, "admin.html")
 
 
+@app.get("/result")
+def result_page():
+    return send_from_directory(ROOT, "result.html")
+
+
 @app.get("/api/projects")
 def projects():
     return jsonify(load_json(ROOT / "data" / "scoring_projects.json"))
@@ -78,6 +83,14 @@ def get_scores():
 def admin_summary_api():
     if not current_admin():
         return jsonify({"error": "Admin login is required."}), 401
+    project = find_project(request.args.get("projectId", "").strip() or default_project_id())
+    if not project:
+        return jsonify({"error": "Project was not found."}), 400
+    return jsonify(admin_summary_from_storage(project))
+
+
+@app.get("/api/result/summary")
+def result_summary_api():
     project = find_project(request.args.get("projectId", "").strip() or default_project_id())
     if not project:
         return jsonify({"error": "Project was not found."}), 400
@@ -174,3 +187,4 @@ def current_admin():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8765"))
     app.run(host="0.0.0.0", port=port)
+
