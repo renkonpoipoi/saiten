@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>採点入力者用画面</title>
+    <link rel="stylesheet" href="./scorer.css" />
+  </head>
+  <body>
+    <main class="input-app">
+      <section class="input-panel" id="projectStep">
+        <p class="eyebrow">SCORE ENTRY</p>
+        <h1>採点プロジェクトを選択</h1>
+        <div class="project-list" id="projectList"></div>
+      </section>
+
+      <section class="input-panel hidden" id="judgeStep">
+        <div class="step-head">
+          <div>
+            <p class="eyebrow">JUDGE</p>
+            <h1>自分の名前を選択</h1>
+          </div>
+          <button class="ghost-button" id="backToProjectsButton" type="button">戻る</button>
+        </div>
+        <p class="project-name" id="selectedProjectName"></p>
+        <div class="judge-grid" id="judgeGrid"></div>
+      </section>
+
+      <section class="input-panel hidden" id="entryStep">
+        <div class="step-head">
+          <div>
+            <p class="eyebrow">SCORE SHEET</p>
+            <h1><span id="activeJudgeName"></span>さんの入力画面</h1>
+          </div>
+          <button class="ghost-button" id="changeJudgeButton" type="button">選び直す</button>
+        </div>
+
+        <div class="ready-card">
+          <div>
+            <span>プロジェクト</span>
+            <strong id="activeProjectName"></strong>
+          </div>
+          <div>
+            <span>入力者</span>
+            <strong id="activeJudgeLabel"></strong>
+          </div>
+        </div>
+
+        <section class="team-preview">
+          <div class="section-title">
+            <p class="eyebrow">TEAMS</p>
+            <h2>3チームをこの画面で採点</h2>
+          </div>
+          <div class="score-sheet" id="scoreSheet"></div>
+          <div class="submit-panel" id="submitPanel">
+            <div>
+              <span id="completionText">未入力があります</span>
+              <strong id="submitStatusText">3チームすべて入力すると提出できます</strong>
+            </div>
+            <button class="submit-button" id="submitButton" type="button" disabled>提出</button>
+          </div>
+        </section>
+      </section>
+
+      <div class="toast hidden" id="messageBox"></div>
+    </main>
+
+    <script src="./scorer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>管理者ログイン</title>
+    <link rel="stylesheet" href="./admin.css" />
+  </head>
+  <body>
+    <main class="admin-app login-app">
+      <section class="admin-panel login-panel">
+        <div>
+          <p class="eyebrow">ADMIN LOGIN</p>
+          <h1>管理者ログイン</h1>
+        </div>
+        <form class="admin-login-form" id="loginForm">
+          <label>
+            <span>アクセスコード</span>
+            <input id="accessCodeInput" type="password" autocomplete="current-password" autofocus />
+          </label>
+          <button class="reveal-button" type="submit">ログイン</button>
+        </form>
+        <p class="login-note">管理者2人だけが入れる画面です。</p>
+      </section>
+      <div class="toast hidden" id="messageBox"></div>
+    </main>
+    <script src="./admin_login.js"></script>
+  </body>
+</html>
