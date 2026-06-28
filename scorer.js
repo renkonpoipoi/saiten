@@ -11,6 +11,7 @@ const els = {
   activeJudgeName: document.querySelector("#activeJudgeName"),
   activeProjectName: document.querySelector("#activeProjectName"),
   activeJudgeLabel: document.querySelector("#activeJudgeLabel"),
+  inputWindowNotice: document.querySelector("#inputWindowNotice"),
   scoreSheet: document.querySelector("#scoreSheet"),
   submitPanel: document.querySelector("#submitPanel"),
   completionText: document.querySelector("#completionText"),
@@ -32,6 +33,9 @@ const scoreFields = [
 const initialParams = new URLSearchParams(window.location.search);
 const initialProjectId = initialParams.get("project") || "";
 const initialJudgeId = initialParams.get("judge") || "";
+const ENTRY_WINDOW_START = new Date("2026-07-02T14:30:00+09:00");
+const ENTRY_WINDOW_END = new Date("2026-07-02T16:10:00+09:00");
+const ENTRY_WINDOW_LABEL = "2026年7月2日 14:30〜16:10";
 
 let projects = [];
 let activeProject = null;
@@ -45,6 +49,9 @@ els.changeJudgeButton.addEventListener("click", () => showStep("judge"));
 els.submitButton.addEventListener("click", submitScores);
 
 loadProjects();
+setInterval(() => {
+  if (activeSession) updateEntryWindowState();
+}, 15000);
 
 async function loadProjects() {
   try {
@@ -103,10 +110,19 @@ function selectProject(projectId) {
 
 function renderJudges() {
   els.judgeGrid.replaceChildren();
+  loadProjectSummary(activeProject.id).then((summary) => {
+    els.judgeGrid.querySelectorAll(".judge-button").forEach((button) => {
+      const judge = summary?.judges?.find((item) => item.id === button.dataset.judgeId);
+      const submitted = Boolean(judge?.submitted);
+      button.classList.toggle("submitted", submitted);
+      button.querySelector("span").textContent = submitted ? "入力済み" : "この名前で入る";
+    });
+  });
   activeProject.judges.forEach((judge) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "judge-button";
+    button.dataset.judgeId = judge.id;
     button.innerHTML = `
       <strong></strong>
       <span>この名前で入る</span>
@@ -153,6 +169,7 @@ function renderEntry(session) {
   els.activeProjectName.textContent = session.projectName;
   els.activeJudgeLabel.textContent = session.judgeName;
   els.scoreSheet.replaceChildren();
+  updateEntryWindowNotice();
   activeProject.teams.forEach((team) => {
     const card = document.createElement("article");
     card.className = "score-team-card";
@@ -198,7 +215,14 @@ function renderEntry(session) {
       input.dataset.scored = hasValue ? "true" : "false";
       output.textContent = hasValue ? `${currentValue}/20` : "--/20";
       input.addEventListener("input", () => {
+        if (!isEntryWindowOpen()) {
+          input.value = input.dataset.previousValue || input.value;
+          showMessage(inputWindowClosedMessage());
+          updateEntryWindowState();
+          return;
+        }
         input.dataset.scored = "true";
+        input.dataset.previousValue = input.value;
         output.textContent = `${input.value}/20`;
         updateTeamTotal(card);
         updateSubmitState();
@@ -209,7 +233,17 @@ function renderEntry(session) {
 
     const comment = card.querySelector("textarea");
     comment.value = current.comment || "";
-    comment.addEventListener("input", () => queueSave(team.id, card));
+    comment.addEventListener("input", () => {
+      if (!isEntryWindowOpen()) {
+        comment.value = comment.dataset.previousValue || "";
+        showMessage(inputWindowClosedMessage());
+        updateEntryWindowState();
+        return;
+      }
+      comment.dataset.previousValue = comment.value;
+      queueSave(team.id, card);
+    });
+    comment.dataset.previousValue = comment.value;
 
     updateTeamTotal(card);
     card.querySelector("[data-status]").textContent = current.updatedAt ? "保存済み" : "未保存";
@@ -225,10 +259,16 @@ function updateTeamTotal(card) {
     return sum + (input.dataset.scored === "true" ? Number(input.value) : 0);
   }, 0);
   card.querySelector("[data-total]").textContent = total;
+  updateTeamCardState(card);
 }
 
 function queueSave(teamId, card) {
   if (activeSubmitted) return;
+  if (!isEntryWindowOpen()) {
+    showMessage(inputWindowClosedMessage());
+    updateEntryWindowState();
+    return;
+  }
   const status = card.querySelector("[data-status]");
   status.textContent = "保存中...";
   clearTimeout(saveTimers.get(teamId));
@@ -241,6 +281,12 @@ function queueSave(teamId, card) {
 }
 
 async function saveTeamScore(teamId, card) {
+  if (!isEntryWindowOpen()) {
+    card.querySelector("[data-status]").textContent = "時間外";
+    showMessage(inputWindowClosedMessage());
+    updateEntryWindowState();
+    return false;
+  }
   const entry = collectTeamEntry(card);
   try {
     const response = await fetch("/api/scores", {
@@ -279,12 +325,17 @@ function updateSubmitState() {
   const missing = missingRequiredInputs();
   const complete = missing.length === 0;
   els.completionText.textContent = complete ? "入力完了" : `未入力 ${missing.length}項目`;
-  els.submitStatusText.textContent = activeSubmitted
+  const windowOpen = isEntryWindowOpen();
+  els.submitStatusText.textContent = !windowOpen
+    ? inputWindowClosedMessage()
+    : activeSubmitted
     ? "提出済みです"
     : complete
       ? "提出できます。提出後は変更できません。"
       : "3チームすべて入力すると提出できます";
-  els.submitButton.disabled = activeSubmitted || !complete;
+  els.submitButton.disabled = activeSubmitted || !complete || !windowOpen;
+  updateEntryWindowNotice();
+  els.scoreSheet.querySelectorAll(".score-team-card").forEach(updateTeamCardState);
 }
 
 function missingRequiredInputs() {
@@ -301,6 +352,11 @@ function missingRequiredInputs() {
 
 async function submitScores() {
   if (activeSubmitted || missingRequiredInputs().length) return;
+  if (!isEntryWindowOpen()) {
+    showMessage(inputWindowClosedMessage());
+    updateEntryWindowState();
+    return;
+  }
   els.submitButton.disabled = true;
   els.submitStatusText.textContent = "保存して提出中...";
   hideMessage();
@@ -341,10 +397,65 @@ async function submitScores() {
 
 function setSubmittedMode(submitted) {
   els.scoreSheet.querySelectorAll("input, textarea").forEach((input) => {
-    input.disabled = submitted;
+    input.disabled = submitted || !isEntryWindowOpen();
   });
   els.submitButton.textContent = submitted ? "提出済み" : "提出";
   els.submitPanel?.classList.toggle("submitted", submitted);
+  els.scoreSheet.querySelectorAll(".score-team-card").forEach(updateTeamCardState);
+}
+
+async function loadProjectSummary(projectId) {
+  try {
+    const response = await fetch(`/api/result/summary?projectId=${encodeURIComponent(projectId)}`);
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
+function isEntryWindowOpen(now = new Date()) {
+  return now >= ENTRY_WINDOW_START && now <= ENTRY_WINDOW_END;
+}
+
+function inputWindowClosedMessage() {
+  const now = new Date();
+  if (now < ENTRY_WINDOW_START) return `入力開始前です。入力可能時間は ${ENTRY_WINDOW_LABEL} です。`;
+  return `入力時間は終了しました。入力可能時間は ${ENTRY_WINDOW_LABEL} でした。`;
+}
+
+function updateEntryWindowNotice() {
+  if (!els.inputWindowNotice) return;
+  const open = isEntryWindowOpen();
+  els.inputWindowNotice.classList.toggle("closed", !open);
+  els.inputWindowNotice.classList.toggle("open", open);
+  els.inputWindowNotice.textContent = open
+    ? `入力受付中: ${ENTRY_WINDOW_LABEL}`
+    : inputWindowClosedMessage();
+}
+
+function updateEntryWindowState() {
+  updateEntryWindowNotice();
+  setSubmittedMode(activeSubmitted);
+  updateSubmitState();
+}
+
+function isTeamEntered(card) {
+  return scoreFields.every((field) => {
+    const input = card.querySelector(`[name="${field.key}"]`);
+    return input?.dataset.scored === "true";
+  });
+}
+
+function updateTeamCardState(card) {
+  const entered = isTeamEntered(card);
+  card.classList.toggle("is-entered", entered);
+  card.classList.toggle("is-submitted", activeSubmitted);
+  card.classList.toggle("is-closed", !isEntryWindowOpen() && !activeSubmitted);
+  const status = card.querySelector("[data-status]");
+  if (status && entered && !activeSubmitted && status.textContent === "未保存") {
+    status.textContent = "入力済み";
+  }
 }
 
 function showStep(name) {

@@ -145,6 +145,17 @@ h2 {
   font-size: 1.15rem;
 }
 
+.judge-button.submitted {
+  border-color: rgba(66, 198, 182, 0.7);
+  background:
+    linear-gradient(180deg, rgba(66, 198, 182, 0.2), rgba(0, 0, 0, 0.34)),
+    rgba(16, 42, 44, 0.96);
+}
+
+.judge-button.submitted span {
+  color: #9ff0e6;
+}
+
 .project-button strong {
   overflow-wrap: anywhere;
   font-size: 1.42rem;
@@ -199,6 +210,36 @@ h2 {
   font-size: 1.2rem;
 }
 
+.input-window-notice {
+  min-height: 56px;
+  display: grid;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(242, 193, 78, 0.42);
+  color: #fff3c4;
+  background:
+    linear-gradient(180deg, rgba(242, 193, 78, 0.14), rgba(0, 0, 0, 0.2)),
+    rgba(32, 28, 18, 0.92);
+  font-weight: 900;
+}
+
+.input-window-notice.open {
+  border-color: rgba(66, 198, 182, 0.58);
+  color: #c8fff8;
+  background:
+    linear-gradient(180deg, rgba(66, 198, 182, 0.16), rgba(0, 0, 0, 0.22)),
+    rgba(12, 32, 34, 0.92);
+}
+
+.input-window-notice.closed {
+  border-color: rgba(217, 41, 54, 0.48);
+  color: #ffe0e0;
+  background:
+    linear-gradient(180deg, rgba(217, 41, 54, 0.16), rgba(0, 0, 0, 0.24)),
+    rgba(48, 16, 20, 0.92);
+}
+
 .team-row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
@@ -219,6 +260,25 @@ h2 {
   display: grid;
   gap: 14px;
   padding: 16px;
+}
+
+.score-team-card.is-entered {
+  border-color: rgba(66, 198, 182, 0.72);
+  background:
+    linear-gradient(180deg, rgba(66, 198, 182, 0.14), rgba(0, 0, 0, 0.32)),
+    rgba(18, 36, 38, 0.96);
+}
+
+.score-team-card.is-entered .save-status {
+  color: #9ff0e6;
+}
+
+.score-team-card.is-submitted {
+  border-color: rgba(242, 193, 78, 0.64);
+}
+
+.score-team-card.is-closed {
+  opacity: 0.78;
 }
 
 .score-team-head {

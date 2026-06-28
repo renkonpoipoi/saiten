@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>結果発表</title>
+    <link rel="stylesheet" href="./result.css" />
+  </head>
+  <body>
+    <main class="result-app">
+      <section class="result-panel" id="standbyPanel">
+        <header class="result-head">
+          <div>
+            <p class="eyebrow">FINAL RESULT</p>
+            <h1 id="projectName">結果発表</h1>
+          </div>
+          <button class="ghost-button" id="refreshButton" type="button">更新</button>
+        </header>
+
+        <div class="status-summary">
+          <div>
+            <span>提出状況</span>
+            <strong id="submitCount">0 / 0</strong>
+          </div>
+          <div>
+            <span>状態</span>
+            <strong id="readyState">確認中</strong>
+          </div>
+        </div>
+
+        <section class="result-section">
+          <div class="section-title">
+            <p class="eyebrow">RANKING</p>
+            <h2>暫定結果</h2>
+          </div>
+          <div class="ranking-list" id="rankingList"></div>
+        </section>
+
+        <button class="reveal-button" id="startRevealButton" type="button" disabled>結果発表</button>
+      </section>
+
+      <section class="reveal-stage hidden" id="revealStage">
+        <button class="ghost-button back-button" id="backButton" type="button">戻る</button>
+        <div class="reveal-screen">
+          <p class="eyebrow">FINAL RESULT</p>
+          <div class="reveal-team" id="revealTeam">READY</div>
+          <div class="reveal-score" id="revealScore">---</div>
+          <div class="reveal-sub" id="revealSub">結果発表</div>
+          <div class="reveal-ranking" id="revealRanking"></div>
+        </div>
+      </section>
+
+      <div class="toast hidden" id="messageBox"></div>
+    </main>
+
+    <script src="./result.js"></script>
+  </body>
+</html>

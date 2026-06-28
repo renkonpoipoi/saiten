@@ -4,7 +4,7 @@ import argparse
 import json
 import mimetypes
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,8 +16,6 @@ DATA_DIR = ROOT / "data"
 PROJECTS_PATH = DATA_DIR / "scoring_projects.json"
 SESSIONS_PATH = DATA_DIR / "judge_sessions.json"
 SCORES_PATH = DATA_DIR / "scores.json"
-ADMIN_USERS_PATH = DATA_DIR / "admin_users.json"
-ADMIN_SESSIONS_PATH = DATA_DIR / "admin_sessions.json"
 
 SCORE_FIELDS = {
     "originality": "独創性",
@@ -27,10 +25,14 @@ SCORE_FIELDS = {
     "scalability": "拡張性",
 }
 MAX_SCORE = 20
+JST = timezone(timedelta(hours=9))
+ENTRY_WINDOW_START = datetime(2026, 7, 2, 14, 30, tzinfo=JST)
+ENTRY_WINDOW_END = datetime(2026, 7, 2, 16, 10, tzinfo=JST)
+ENTRY_WINDOW_LABEL = "2026年7月2日 14:30〜16:10"
 
 
 class ScoreAppHandler(SimpleHTTPRequestHandler):
-    server_version = "M1ScoreInput/0.1"
+    server_version = "M1ScoreInputOnly/0.2"
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
@@ -40,20 +42,8 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         if path == "/input":
             self.serve_file(ROOT / "scorer.html", "text/html; charset=utf-8")
             return
-        if path == "/admin":
-            query = parse_qs(urlparse(self.path).query)
-            admin_key = first_query_value(query, "key")
-            if admin_key:
-                admin = find_admin_by_code(admin_key)
-                if not admin:
-                    self.serve_file(ROOT / "admin_login.html", "text/html; charset=utf-8")
-                    return
-                self.create_admin_session(admin, redirect_to="/admin")
-                return
-            if not self.current_admin():
-                self.serve_file(ROOT / "admin_login.html", "text/html; charset=utf-8")
-                return
-            self.serve_file(ROOT / "admin.html", "text/html; charset=utf-8")
+        if path in {"/admin", "/result"}:
+            self.redirect("/input")
             return
         if path == "/api/projects":
             self.send_json(load_json(PROJECTS_PATH))
@@ -61,12 +51,15 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         if path == "/api/scores":
             self.get_scores()
             return
-        if path == "/api/admin/summary":
-            if not self.require_admin():
-                return
-            self.get_admin_summary()
+        if path == "/api/entry-window":
+            self.send_json(entry_window_status())
             return
-        super().do_GET()
+        if path == "/api/result/summary":
+            self.get_result_summary()
+            return
+        if self.serve_public_asset(path):
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -79,83 +72,23 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         if path == "/api/submit":
             self.submit_scores()
             return
-        if path == "/api/admin/login":
-            self.admin_login()
-            return
-        if path == "/api/admin/logout":
-            self.admin_logout()
-            return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
-
-    def require_admin(self) -> bool:
-        if self.current_admin():
-            return True
-        self.send_json({"error": "Admin login is required."}, HTTPStatus.UNAUTHORIZED)
-        return False
-
-    def current_admin(self) -> dict | None:
-        token = cookie_value(self.headers.get("Cookie", ""), "admin_session")
-        if not token:
-            return None
-        sessions = load_json(ADMIN_SESSIONS_PATH, {"sessions": {}}).get("sessions", {})
-        session = sessions.get(token)
-        if not session:
-            return None
-        return find_admin(session.get("adminId", ""))
-
-    def admin_login(self) -> None:
-        try:
-            payload = self.read_json_body()
-        except ValueError as exc:
-            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            return
-        admin = find_admin_by_code(str(payload.get("accessCode", "")).strip())
-        if not admin:
-            self.send_json({"error": "アクセスコードが違います。"}, HTTPStatus.UNAUTHORIZED)
-            return
-        self.create_admin_session(admin)
-
-    def create_admin_session(self, admin: dict, redirect_to: str | None = None) -> None:
-        token = secrets.token_urlsafe(32)
-        sessions = load_json(ADMIN_SESSIONS_PATH, {"sessions": {}})
-        sessions.setdefault("sessions", {})[token] = {
-            "adminId": admin["id"],
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        }
-        save_json(ADMIN_SESSIONS_PATH, sessions)
-        cookie = f"admin_session={token}; HttpOnly; SameSite=Lax; Path=/"
-        if redirect_to:
-            self.send_response(HTTPStatus.FOUND)
-            self.send_header("Location", redirect_to)
-            self.send_header("Set-Cookie", cookie)
-            self.end_headers()
-            return
-        self.send_json_with_headers({"admin": {"id": admin["id"], "name": admin["name"]}}, {"Set-Cookie": cookie})
-
-    def admin_logout(self) -> None:
-        token = cookie_value(self.headers.get("Cookie", ""), "admin_session")
-        if token:
-            sessions = load_json(ADMIN_SESSIONS_PATH, {"sessions": {}})
-            sessions.get("sessions", {}).pop(token, None)
-            save_json(ADMIN_SESSIONS_PATH, sessions)
-        self.send_json_with_headers(
-            {"ok": True},
-            {"Set-Cookie": "admin_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"},
-        )
 
     def get_scores(self) -> None:
         query = parse_qs(urlparse(self.path).query)
         project_id = first_query_value(query, "projectId")
         judge_id = first_query_value(query, "judgeId")
-        if not find_project(project_id):
-            self.send_json({"error": "Project was not found."}, HTTPStatus.BAD_REQUEST)
+        project = find_project(project_id)
+        judge = find_judge(project, judge_id) if project else None
+        if not project or not judge:
+            self.send_json({"error": "Project or judge was not found."}, HTTPStatus.BAD_REQUEST)
             return
         scores = load_json(SCORES_PATH, {"scores": {}, "submissions": {}}).get("scores", {})
         submitted = is_submitted(project_id, judge_id)
         judge_scores = scores.get(project_id, {}).get(judge_id, {})
-        self.send_json({"scores": judge_scores, "submitted": submitted})
+        self.send_json({"scores": judge_scores, "submitted": submitted, "entryWindow": entry_window_status()})
 
-    def get_admin_summary(self) -> None:
+    def get_result_summary(self) -> None:
         query = parse_qs(urlparse(self.path).query)
         project_id = first_query_value(query, "projectId") or default_project_id()
         project = find_project(project_id)
@@ -190,7 +123,7 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         sessions = load_json(SESSIONS_PATH, {"sessions": []})
         sessions.setdefault("sessions", []).append(session)
         save_json(SESSIONS_PATH, sessions)
-        self.send_json({"session": session, "project": public_project(project)})
+        self.send_json({"session": session, "project": public_project(project), "entryWindow": entry_window_status()})
 
     def save_scores(self) -> None:
         try:
@@ -208,18 +141,17 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         if not project or not judge or not team:
             self.send_json({"error": "Project, judge, or team was not found."}, HTTPStatus.BAD_REQUEST)
             return
+        if not is_entry_window_open():
+            self.send_json({"error": entry_window_closed_message(), "entryWindow": entry_window_status()}, HTTPStatus.FORBIDDEN)
+            return
         if is_submitted(project_id, judge_id):
             self.send_json({"error": "Submitted scores cannot be changed."}, HTTPStatus.CONFLICT)
             return
 
         entry = normalize_score_entry(payload.get("entry", {}))
         scores = load_json(SCORES_PATH, {"scores": {}, "submissions": {}})
-        project_scores = scores.setdefault("scores", {}).setdefault(project_id, {})
-        judge_scores = project_scores.setdefault(judge_id, {})
-        judge_scores[team_id] = {
-            **entry,
-            "updatedAt": datetime.now(timezone.utc).isoformat(),
-        }
+        judge_scores = scores.setdefault("scores", {}).setdefault(project_id, {}).setdefault(judge_id, {})
+        judge_scores[team_id] = {**entry, "updatedAt": datetime.now(timezone.utc).isoformat()}
         save_json(SCORES_PATH, scores)
         self.send_json({"entry": judge_scores[team_id]})
 
@@ -237,6 +169,9 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         if not project or not judge:
             self.send_json({"error": "Project or judge was not found."}, HTTPStatus.BAD_REQUEST)
             return
+        if not is_entry_window_open():
+            self.send_json({"error": entry_window_closed_message(), "entryWindow": entry_window_status()}, HTTPStatus.FORBIDDEN)
+            return
 
         scores = load_json(SCORES_PATH, {"scores": {}, "submissions": {}})
         judge_scores = scores.setdefault("scores", {}).setdefault(project_id, {}).setdefault(judge_id, {})
@@ -246,9 +181,7 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
             return
 
         submitted_at = datetime.now(timezone.utc).isoformat()
-        scores.setdefault("submissions", {}).setdefault(project_id, {})[judge_id] = {
-            "submittedAt": submitted_at,
-        }
+        scores.setdefault("submissions", {}).setdefault(project_id, {})[judge_id] = {"submittedAt": submitted_at}
         save_json(SCORES_PATH, scores)
         self.send_json({"submitted": True, "submittedAt": submitted_at})
 
@@ -261,6 +194,16 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             raise ValueError("Request body must be JSON.") from exc
 
+    def serve_public_asset(self, path: str) -> bool:
+        clean = path.lstrip("/")
+        if clean in {"scorer.css", "scorer.js"}:
+            self.serve_file(ROOT / clean)
+            return True
+        if clean.startswith("assets/"):
+            self.serve_file(ROOT / clean)
+            return True
+        return False
+
     def serve_file(self, path: Path, content_type: str | None = None) -> None:
         if not path.exists() or not path.is_file():
             self.send_error(HTTPStatus.NOT_FOUND, "File not found")
@@ -270,19 +213,16 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", guessed)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store" if path.suffix in {".html", ".js", ".css"} else "public, max-age=3600")
         self.end_headers()
         self.wfile.write(data)
 
     def send_json(self, payload: dict, status: HTTPStatus = HTTPStatus.OK) -> None:
-        self.send_json_with_headers(payload, {}, status)
-
-    def send_json_with_headers(self, payload: dict, headers: dict, status: HTTPStatus = HTTPStatus.OK) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
-        for key, value in headers.items():
-            self.send_header(key, value)
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -298,17 +238,13 @@ def load_json(path: Path, fallback: dict | None = None) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def score_store() -> dict:
-    return load_json(SCORES_PATH, {"scores": {}, "submissions": {}})
-
-
-def admin_users() -> list[dict]:
-    return load_json(ADMIN_USERS_PATH, {"admins": []}).get("admins", [])
-
-
 def save_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def score_store() -> dict:
+    return load_json(SCORES_PATH, {"scores": {}, "submissions": {}})
 
 
 def find_project(project_id: str) -> dict | None:
@@ -319,23 +255,6 @@ def find_project(project_id: str) -> dict | None:
 def default_project_id() -> str:
     projects = load_json(PROJECTS_PATH, {"projects": []}).get("projects", [])
     return str(projects[0].get("id", "")) if projects else ""
-
-
-def find_admin(admin_id: str) -> dict | None:
-    return next((admin for admin in admin_users() if admin.get("id") == admin_id), None)
-
-
-def find_admin_by_code(access_code: str) -> dict | None:
-    return next((admin for admin in admin_users() if admin.get("accessCode") == access_code), None)
-
-
-def cookie_value(cookie_header: str, name: str) -> str:
-    prefix = f"{name}="
-    for part in cookie_header.split(";"):
-        item = part.strip()
-        if item.startswith(prefix):
-            return item[len(prefix):]
-    return ""
 
 
 def find_judge(project: dict | None, judge_id: str) -> dict | None:
@@ -438,14 +357,12 @@ def admin_summary(project: dict) -> dict:
         )
     team_results.sort(key=lambda item: (-item["total"], item["order"]))
 
-    submitted_count = len(submitted_judge_ids)
-    total_judges = len(project.get("judges", []))
     return {
         "project": public_project(project),
         "judges": judges,
-        "submittedCount": submitted_count,
-        "totalJudges": total_judges,
-        "allSubmitted": total_judges > 0 and submitted_count == total_judges,
+        "submittedCount": len(submitted_judge_ids),
+        "totalJudges": len(project.get("judges", [])),
+        "allSubmitted": len(project.get("judges", [])) > 0 and len(submitted_judge_ids) == len(project.get("judges", [])),
         "teamResults": team_results,
     }
 
@@ -460,8 +377,34 @@ def public_project(project: dict) -> dict:
     }
 
 
+def now_jst() -> datetime:
+    return datetime.now(JST)
+
+
+def is_entry_window_open() -> bool:
+    current = now_jst()
+    return ENTRY_WINDOW_START <= current <= ENTRY_WINDOW_END
+
+
+def entry_window_closed_message() -> str:
+    if now_jst() < ENTRY_WINDOW_START:
+        return f"入力開始前です。入力可能時間は {ENTRY_WINDOW_LABEL} です。"
+    return f"入力時間は終了しました。入力可能時間は {ENTRY_WINDOW_LABEL} でした。"
+
+
+def entry_window_status() -> dict:
+    return {
+        "open": is_entry_window_open(),
+        "label": ENTRY_WINDOW_LABEL,
+        "start": ENTRY_WINDOW_START.isoformat(),
+        "end": ENTRY_WINDOW_END.isoformat(),
+        "now": now_jst().isoformat(),
+        "message": "入力受付中です。" if is_entry_window_open() else entry_window_closed_message(),
+    }
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the M1 score input app.")
+    parser = argparse.ArgumentParser(description="Run the score input-only app.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()

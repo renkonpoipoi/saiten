@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, request, send_from_directory, session
+from flask import Flask, jsonify, redirect, request, send_from_directory
 
 from server import (
     ROOT,
-    default_project_id,
-    find_admin,
-    find_admin_by_code,
     find_judge,
     find_project,
     find_team,
@@ -34,6 +31,11 @@ app = Flask(__name__, static_folder=None)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_urlsafe(32)
 init_storage()
 
+JST = timezone(timedelta(hours=9))
+ENTRY_WINDOW_START = datetime(2026, 7, 2, 14, 30, tzinfo=JST)
+ENTRY_WINDOW_END = datetime(2026, 7, 2, 16, 10, tzinfo=JST)
+ENTRY_WINDOW_LABEL = "2026年7月2日 14:30〜16:10"
+
 
 @app.get("/")
 def home():
@@ -46,21 +48,9 @@ def input_page():
 
 
 @app.get("/admin")
-def admin_page():
-    admin_key = request.args.get("key", "").strip()
-    if admin_key:
-        admin = find_admin_by_code(admin_key)
-        if admin:
-            session["admin_id"] = admin["id"]
-            return redirect("/admin")
-    if not current_admin():
-        return send_from_directory(ROOT, "admin_login.html")
-    return send_from_directory(ROOT, "admin.html")
-
-
 @app.get("/result")
-def result_page():
-    return send_from_directory(ROOT, "result.html")
+def hidden_page():
+    return redirect("/input")
 
 
 @app.get("/api/projects")
@@ -75,18 +65,19 @@ def get_scores():
     project = find_project(project_id)
     judge = find_judge(project, judge_id) if project else None
     if not project or not judge:
-        return jsonify({"error": "Project was not found."}), 400
-    return jsonify({"scores": get_judge_scores(project_id, judge_id), "submitted": is_submitted(project_id, judge_id)})
+        return jsonify({"error": "Project or judge was not found."}), 400
+    return jsonify(
+        {
+            "scores": get_judge_scores(project_id, judge_id),
+            "submitted": is_submitted(project_id, judge_id),
+            "entryWindow": entry_window_status(),
+        }
+    )
 
 
-@app.get("/api/admin/summary")
-def admin_summary_api():
-    if not current_admin():
-        return jsonify({"error": "Admin login is required."}), 401
-    project = find_project(request.args.get("projectId", "").strip() or default_project_id())
-    if not project:
-        return jsonify({"error": "Project was not found."}), 400
-    return jsonify(admin_summary_from_storage(project))
+@app.get("/api/entry-window")
+def entry_window():
+    return jsonify(entry_window_status())
 
 
 @app.get("/api/result/summary")
@@ -95,22 +86,6 @@ def result_summary_api():
     if not project:
         return jsonify({"error": "Project was not found."}), 400
     return jsonify(admin_summary_from_storage(project))
-
-
-@app.post("/api/admin/login")
-def admin_login():
-    payload = request.get_json(silent=True) or {}
-    admin = find_admin_by_code(str(payload.get("accessCode", "")).strip())
-    if not admin:
-        return jsonify({"error": "アクセスコードが違います。"}), 401
-    session["admin_id"] = admin["id"]
-    return jsonify({"admin": {"id": admin["id"], "name": admin["name"]}})
-
-
-@app.post("/api/admin/logout")
-def admin_logout():
-    session.pop("admin_id", None)
-    return jsonify({"ok": True})
 
 
 @app.post("/api/judge-session")
@@ -131,7 +106,13 @@ def judge_session():
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
     save_judge_session(judge_session_data)
-    return jsonify({"session": judge_session_data, "project": public_project(project)})
+    return jsonify(
+        {
+            "session": judge_session_data,
+            "project": public_project(project),
+            "entryWindow": entry_window_status(),
+        }
+    )
 
 
 @app.post("/api/scores")
@@ -145,6 +126,8 @@ def save_scores():
     team = find_team(project, team_id) if project else None
     if not project or not judge or not team:
         return jsonify({"error": "Project, judge, or team was not found."}), 400
+    if not is_entry_window_open():
+        return jsonify({"error": entry_window_closed_message(), "entryWindow": entry_window_status()}), 403
 
     try:
         entry = save_score(project_id, judge_id, team_id, payload.get("entry", {}))
@@ -162,6 +145,8 @@ def submit_scores():
     judge = find_judge(project, judge_id) if project else None
     if not project or not judge:
         return jsonify({"error": "Project or judge was not found."}), 400
+    if not is_entry_window_open():
+        return jsonify({"error": entry_window_closed_message(), "entryWindow": entry_window_status()}), 403
 
     ok, missing, submitted_at = submit_scores_to_storage(project, project_id, judge_id)
     if missing:
@@ -172,19 +157,44 @@ def submit_scores():
 @app.get("/<path:filename>")
 def static_files(filename: str):
     path = Path(filename)
-    if path.parts and path.parts[0] in {"assets"}:
+    if path.parts and path.parts[0] == "assets":
         return send_from_directory(ROOT, filename)
-    if path.suffix in {".css", ".js", ".html", ".png", ".webp", ".wav", ".m4a"}:
+    if filename in {"scorer.css", "scorer.js"}:
         return send_from_directory(ROOT, filename)
     return jsonify({"error": "Not found"}), 404
 
 
-def current_admin():
-    admin_id = session.get("admin_id")
-    return find_admin(admin_id) if admin_id else None
+def default_project_id() -> str:
+    projects = load_json(ROOT / "data" / "scoring_projects.json", {"projects": []}).get("projects", [])
+    return str(projects[0].get("id", "")) if projects else ""
+
+
+def now_jst() -> datetime:
+    return datetime.now(JST)
+
+
+def is_entry_window_open() -> bool:
+    current = now_jst()
+    return ENTRY_WINDOW_START <= current <= ENTRY_WINDOW_END
+
+
+def entry_window_closed_message() -> str:
+    if now_jst() < ENTRY_WINDOW_START:
+        return f"入力開始前です。入力可能時間は {ENTRY_WINDOW_LABEL} です。"
+    return f"入力時間は終了しました。入力可能時間は {ENTRY_WINDOW_LABEL} でした。"
+
+
+def entry_window_status() -> dict:
+    return {
+        "open": is_entry_window_open(),
+        "label": ENTRY_WINDOW_LABEL,
+        "start": ENTRY_WINDOW_START.isoformat(),
+        "end": ENTRY_WINDOW_END.isoformat(),
+        "now": now_jst().isoformat(),
+        "message": "入力受付中です。" if is_entry_window_open() else entry_window_closed_message(),
+    }
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8765"))
     app.run(host="0.0.0.0", port=port)
-

@@ -1,0 +1,14 @@
+{
+  "admins": [
+    {
+      "id": "owner",
+      "name": "管理者1",
+      "accessCode": "admin-owner-4827"
+    },
+    {
+      "id": "friend",
+      "name": "管理者2",
+      "accessCode": "admin-friend-9153"
+    }
+  ]
+}
