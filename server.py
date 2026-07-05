@@ -316,15 +316,22 @@ def is_submitted(project_id: str, judge_id: str) -> bool:
     return bool(submissions.get(project_id, {}).get(judge_id))
 
 
+def missing_fields_for_entry(score_fields: dict[str, str], entry: dict) -> list[str]:
+    missing = []
+    for field_key, field_label in score_fields.items():
+        value = entry.get(field_key, "")
+        if value == "" or value is None:
+            missing.append(field_label)
+    return missing
+
+
 def missing_required_scores(project: dict, judge_scores: dict) -> list[dict]:
     missing = []
     score_fields = get_score_fields(project)
     for team in project.get("teams", []):
         entry = judge_scores.get(team.get("id"), {})
-        for field_key, field_label in score_fields.items():
-            value = entry.get(field_key, "")
-            if value == "" or value is None:
-                missing.append({"teamId": team.get("id"), "teamName": team.get("name"), "field": field_label})
+        for field_label in missing_fields_for_entry(score_fields, entry):
+            missing.append({"teamId": team.get("id"), "teamName": team.get("name"), "field": field_label})
     return missing
 
 

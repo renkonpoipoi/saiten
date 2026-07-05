@@ -19,8 +19,12 @@ from server import (
     public_project,
 )
 from score_storage import (
+    AlreadyFinalizedError,
+    EntryNotFoundError,
+    IncompleteEntryError,
     SubmittedError,
     admin_summary_from_storage,
+    finalize_team_score,
     get_judge_scores,
     init_storage,
     is_submitted,
@@ -134,6 +138,31 @@ def save_scores():
         entry = save_score(project, judge_id, team_id, payload.get("entry", {}))
     except SubmittedError as exc:
         return jsonify({"error": str(exc)}), 409
+    return jsonify({"entry": entry})
+
+
+@app.post("/api/scores/finalize")
+def finalize_score():
+    payload = request.get_json(silent=True) or {}
+    project_id = str(payload.get("projectId", "")).strip()
+    judge_id = str(payload.get("judgeId", "")).strip()
+    team_id = str(payload.get("teamId", "")).strip()
+    project = find_project(project_id)
+    judge = find_judge(project, judge_id) if project else None
+    team = find_team(project, team_id) if project else None
+    if not project or not judge or not team:
+        return jsonify({"error": "Project, judge, or team was not found."}), 400
+    if not is_entry_window_open(project):
+        return jsonify({"error": entry_window_closed_message(project), "entryWindow": entry_window_status(project)}), 403
+
+    try:
+        entry = finalize_team_score(project, judge_id, team_id)
+    except EntryNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except AlreadyFinalizedError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except IncompleteEntryError as exc:
+        return jsonify({"error": "All fields are required before finalizing.", "missing": exc.missing}), 400
     return jsonify({"entry": entry})
 
 

@@ -16,7 +16,6 @@ const els = {
   submitPanel: document.querySelector("#submitPanel"),
   completionText: document.querySelector("#completionText"),
   submitStatusText: document.querySelector("#submitStatusText"),
-  submitButton: document.querySelector("#submitButton"),
   messageBox: document.querySelector("#messageBox"),
   backToProjectsButton: document.querySelector("#backToProjectsButton"),
   changeJudgeButton: document.querySelector("#changeJudgeButton"),
@@ -38,7 +37,6 @@ let projects = [];
 let activeProject = null;
 let activeSession = null;
 let savedScores = {};
-let activeSubmitted = false;
 let activeEntryWindow = { open: true, restricted: false, label: null, start: null, end: null, message: "入力受付中です。" };
 const saveTimers = new Map();
 
@@ -46,9 +44,12 @@ function currentScoreFields() {
   return activeProject?.scoreFields?.length ? activeProject.scoreFields : DEFAULT_SCORE_FIELDS;
 }
 
+function isTeamFinalized(teamId) {
+  return Boolean(savedScores[teamId]?.finalizedAt);
+}
+
 els.backToProjectsButton.addEventListener("click", () => showStep("project"));
 els.changeJudgeButton.addEventListener("click", () => showStep("judge"));
-els.submitButton.addEventListener("click", submitScores);
 
 loadProjects();
 setInterval(() => {
@@ -115,9 +116,15 @@ function renderJudges() {
   loadProjectSummary(activeProject.id).then((summary) => {
     els.judgeGrid.querySelectorAll(".judge-button").forEach((button) => {
       const judge = summary?.judges?.find((item) => item.id === button.dataset.judgeId);
-      const submitted = Boolean(judge?.submitted);
-      button.classList.toggle("submitted", submitted);
-      button.querySelector("span").textContent = submitted ? "入力済み" : "この名前で入る";
+      const finalizedCount = judge?.finalizedTeamCount ?? 0;
+      const totalCount = judge?.totalTeamCount ?? 0;
+      const allDone = Boolean(judge?.allTeamsFinalized);
+      button.classList.toggle("all-finalized", allDone);
+      button.querySelector("span").textContent = allDone
+        ? "入力済み"
+        : finalizedCount > 0
+          ? `確定 ${finalizedCount}/${totalCount}`
+          : "この名前で入る";
     });
   });
   activeProject.judges.forEach((judge) => {
@@ -163,7 +170,6 @@ async function loadScores(session) {
   const response = await fetch(`/api/scores?${params.toString()}`);
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "保存済みの採点を読み込めませんでした。");
-  activeSubmitted = Boolean(data.submitted);
   if (data.entryWindow) activeEntryWindow = data.entryWindow;
   return data.scores || {};
 }
@@ -194,7 +200,10 @@ function renderEntry(session) {
         <span>一言（任意）</span>
         <textarea rows="3" maxlength="160" placeholder="コメントがあれば入力"></textarea>
       </label>
-      <div class="save-status" data-status>未保存</div>
+      <div class="score-team-footer">
+        <div class="save-status" data-status>未保存</div>
+        <button class="finalize-button" data-finalize-button type="button" disabled>この発表者の採点を確定</button>
+      </div>
     `;
     card.querySelector(".team-order").textContent = team.order;
     card.querySelector(".team-title strong").textContent = team.name;
@@ -229,7 +238,7 @@ function renderEntry(session) {
         input.dataset.previousValue = input.value;
         output.textContent = `${input.value}/20`;
         updateTeamTotal(card);
-        updateSubmitState();
+        updateProgressReadout();
         queueSave(team.id, card);
       });
       scoreGrid.append(label);
@@ -249,12 +258,13 @@ function renderEntry(session) {
     });
     comment.dataset.previousValue = comment.value;
 
+    card.querySelector("[data-finalize-button]").addEventListener("click", () => handleFinalizeClick(team.id, card));
+
     updateTeamTotal(card);
     card.querySelector("[data-status]").textContent = current.updatedAt ? "保存済み" : "未保存";
     els.scoreSheet.append(card);
   });
-  updateSubmitState();
-  setSubmittedMode(activeSubmitted);
+  updateProgressReadout();
 }
 
 function updateTeamTotal(card) {
@@ -267,7 +277,7 @@ function updateTeamTotal(card) {
 }
 
 function queueSave(teamId, card) {
-  if (activeSubmitted) return;
+  if (isTeamFinalized(teamId)) return;
   if (!isEntryWindowOpen()) {
     showMessage(inputWindowClosedMessage());
     updateEntryWindowState();
@@ -285,6 +295,7 @@ function queueSave(teamId, card) {
 }
 
 async function saveTeamScore(teamId, card) {
+  if (isTeamFinalized(teamId)) return false;
   if (!isEntryWindowOpen()) {
     card.querySelector("[data-status]").textContent = "時間外";
     showMessage(inputWindowClosedMessage());
@@ -325,87 +336,86 @@ function collectTeamEntry(card) {
   return entry;
 }
 
-function updateSubmitState() {
-  const missing = missingRequiredInputs();
-  const complete = missing.length === 0;
-  els.completionText.textContent = complete ? "入力完了" : `未入力 ${missing.length}項目`;
+function updateProgressReadout() {
+  const total = activeProject.teams.length;
+  const finalizedCount = activeProject.teams.filter((team) => isTeamFinalized(team.id)).length;
   const windowOpen = isEntryWindowOpen();
+  els.completionText.textContent = `${finalizedCount}/${total} 確定済み`;
   els.submitStatusText.textContent = !windowOpen
     ? inputWindowClosedMessage()
-    : activeSubmitted
-    ? "提出済みです"
-    : complete
-      ? "提出できます。提出後は変更できません。"
-      : "すべてのチームを入力すると提出できます";
-  els.submitButton.disabled = activeSubmitted || !complete || !windowOpen;
+    : finalizedCount === total && total > 0
+      ? "すべてのチームの採点を確定しました"
+      : "各チームのカードで採点を確定してください";
+  els.submitPanel?.classList.toggle("all-finalized", finalizedCount === total && total > 0);
   updateEntryWindowNotice();
-  els.scoreSheet.querySelectorAll(".score-team-card").forEach(updateTeamCardState);
+  applyEntryWindowLock();
 }
 
-function missingRequiredInputs() {
-  const missing = [];
+function applyEntryWindowLock() {
   els.scoreSheet.querySelectorAll(".score-team-card").forEach((card) => {
-    const teamName = card.querySelector(".team-title strong").textContent;
-    currentScoreFields().forEach((field) => {
-      const input = card.querySelector(`[name="${field.key}"]`);
-      if (input.dataset.scored !== "true") missing.push(`${teamName} ${field.label}`);
+    const teamId = card.dataset.teamId;
+    const locked = isTeamFinalized(teamId) || !isEntryWindowOpen();
+    card.querySelectorAll("input, textarea").forEach((input) => {
+      input.disabled = locked;
     });
+    updateTeamCardState(card);
+    updateFinalizeButtonState(card);
   });
-  return missing;
 }
 
-async function submitScores() {
-  if (activeSubmitted || missingRequiredInputs().length) return;
-  if (!isEntryWindowOpen()) {
-    showMessage(inputWindowClosedMessage());
-    updateEntryWindowState();
-    return;
+function updateFinalizeButtonState(card) {
+  const button = card.querySelector("[data-finalize-button]");
+  if (!button) return;
+  const teamId = card.dataset.teamId;
+  if (isTeamFinalized(teamId)) {
+    button.disabled = true;
+    button.textContent = "確定済み";
+  } else if (!isEntryWindowOpen()) {
+    button.disabled = true;
+    button.textContent = "入力時間外";
+  } else if (!isTeamEntered(card)) {
+    button.disabled = true;
+    button.textContent = "この発表者の採点を確定";
+  } else {
+    button.disabled = false;
+    button.textContent = "この発表者の採点を確定";
   }
-  els.submitButton.disabled = true;
-  els.submitStatusText.textContent = "保存して提出中...";
+}
+
+async function handleFinalizeClick(teamId, card) {
+  const button = card.querySelector("[data-finalize-button]");
+  button.disabled = true;
+  button.textContent = "確定中...";
   hideMessage();
 
-  for (const [teamId, timer] of saveTimers.entries()) {
-    clearTimeout(timer);
-    saveTimers.delete(teamId);
-  }
+  clearTimeout(saveTimers.get(teamId));
+  saveTimers.delete(teamId);
 
-  const cards = [...els.scoreSheet.querySelectorAll(".score-team-card")];
-  for (const card of cards) {
-    const ok = await saveTeamScore(card.dataset.teamId, card);
-    if (!ok) {
-      updateSubmitState();
-      return;
-    }
+  const saved = await saveTeamScore(teamId, card);
+  if (!saved) {
+    updateFinalizeButtonState(card);
+    return;
   }
 
   try {
-    const response = await fetch("/api/submit", {
+    const response = await fetch("/api/scores/finalize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         projectId: activeSession.projectId,
         judgeId: activeSession.judgeId,
+        teamId,
       }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "提出できませんでした。");
-    activeSubmitted = true;
-    setSubmittedMode(true);
-    updateSubmitState();
+    if (!response.ok) throw new Error(data.error || "確定できませんでした。");
+    savedScores[teamId] = data.entry;
+    card.querySelector("[data-status]").textContent = "確定済み";
+    updateProgressReadout();
   } catch (error) {
     showMessage(error.message);
-    updateSubmitState();
+    updateFinalizeButtonState(card);
   }
-}
-
-function setSubmittedMode(submitted) {
-  els.scoreSheet.querySelectorAll("input, textarea").forEach((input) => {
-    input.disabled = submitted || !isEntryWindowOpen();
-  });
-  els.submitButton.textContent = submitted ? "提出済み" : "提出";
-  els.submitPanel?.classList.toggle("submitted", submitted);
-  els.scoreSheet.querySelectorAll(".score-team-card").forEach(updateTeamCardState);
 }
 
 async function loadProjectSummary(projectId) {
@@ -446,8 +456,7 @@ function updateEntryWindowNotice() {
 
 function updateEntryWindowState() {
   updateEntryWindowNotice();
-  setSubmittedMode(activeSubmitted);
-  updateSubmitState();
+  updateProgressReadout();
 }
 
 function isTeamEntered(card) {
@@ -458,12 +467,16 @@ function isTeamEntered(card) {
 }
 
 function updateTeamCardState(card) {
+  const teamId = card.dataset.teamId;
+  const finalized = isTeamFinalized(teamId);
   const entered = isTeamEntered(card);
-  card.classList.toggle("is-entered", entered);
-  card.classList.toggle("is-submitted", activeSubmitted);
-  card.classList.toggle("is-closed", !isEntryWindowOpen() && !activeSubmitted);
+  card.classList.toggle("is-entered", entered && !finalized);
+  card.classList.toggle("is-finalized", finalized);
+  card.classList.toggle("is-closed", !isEntryWindowOpen() && !finalized);
   const status = card.querySelector("[data-status]");
-  if (status && entered && !activeSubmitted && status.textContent === "未保存") {
+  if (status && finalized) {
+    status.textContent = "確定済み";
+  } else if (status && entered && status.textContent === "未保存") {
     status.textContent = "入力済み";
   }
 }
