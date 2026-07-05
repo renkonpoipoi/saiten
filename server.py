@@ -26,9 +26,6 @@ SCORE_FIELDS = {
 }
 MAX_SCORE = 20
 JST = timezone(timedelta(hours=9))
-ENTRY_WINDOW_START = datetime(2026, 7, 2, 14, 30, tzinfo=JST)
-ENTRY_WINDOW_END = datetime(2026, 7, 2, 16, 10, tzinfo=JST)
-ENTRY_WINDOW_LABEL = "2026年7月2日 14:30〜16:10"
 
 
 class ScoreAppHandler(SimpleHTTPRequestHandler):
@@ -52,7 +49,13 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
             self.get_scores()
             return
         if path == "/api/entry-window":
-            self.send_json(entry_window_status())
+            query = parse_qs(urlparse(self.path).query)
+            project_id = first_query_value(query, "projectId") or default_project_id()
+            project = find_project(project_id)
+            if not project:
+                self.send_json({"error": "Project was not found."}, HTTPStatus.BAD_REQUEST)
+                return
+            self.send_json(entry_window_status(project))
             return
         if path == "/api/result/summary":
             self.get_result_summary()
@@ -86,7 +89,7 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         scores = load_json(SCORES_PATH, {"scores": {}, "submissions": {}}).get("scores", {})
         submitted = is_submitted(project_id, judge_id)
         judge_scores = scores.get(project_id, {}).get(judge_id, {})
-        self.send_json({"scores": judge_scores, "submitted": submitted, "entryWindow": entry_window_status()})
+        self.send_json({"scores": judge_scores, "submitted": submitted, "entryWindow": entry_window_status(project)})
 
     def get_result_summary(self) -> None:
         query = parse_qs(urlparse(self.path).query)
@@ -123,7 +126,7 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         sessions = load_json(SESSIONS_PATH, {"sessions": []})
         sessions.setdefault("sessions", []).append(session)
         save_json(SESSIONS_PATH, sessions)
-        self.send_json({"session": session, "project": public_project(project), "entryWindow": entry_window_status()})
+        self.send_json({"session": session, "project": public_project(project), "entryWindow": entry_window_status(project)})
 
     def save_scores(self) -> None:
         try:
@@ -141,14 +144,14 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         if not project or not judge or not team:
             self.send_json({"error": "Project, judge, or team was not found."}, HTTPStatus.BAD_REQUEST)
             return
-        if not is_entry_window_open():
-            self.send_json({"error": entry_window_closed_message(), "entryWindow": entry_window_status()}, HTTPStatus.FORBIDDEN)
+        if not is_entry_window_open(project):
+            self.send_json({"error": entry_window_closed_message(project), "entryWindow": entry_window_status(project)}, HTTPStatus.FORBIDDEN)
             return
         if is_submitted(project_id, judge_id):
             self.send_json({"error": "Submitted scores cannot be changed."}, HTTPStatus.CONFLICT)
             return
 
-        entry = normalize_score_entry(payload.get("entry", {}))
+        entry = normalize_score_entry(payload.get("entry", {}), get_score_fields(project))
         scores = load_json(SCORES_PATH, {"scores": {}, "submissions": {}})
         judge_scores = scores.setdefault("scores", {}).setdefault(project_id, {}).setdefault(judge_id, {})
         judge_scores[team_id] = {**entry, "updatedAt": datetime.now(timezone.utc).isoformat()}
@@ -169,8 +172,8 @@ class ScoreAppHandler(SimpleHTTPRequestHandler):
         if not project or not judge:
             self.send_json({"error": "Project or judge was not found."}, HTTPStatus.BAD_REQUEST)
             return
-        if not is_entry_window_open():
-            self.send_json({"error": entry_window_closed_message(), "entryWindow": entry_window_status()}, HTTPStatus.FORBIDDEN)
+        if not is_entry_window_open(project):
+            self.send_json({"error": entry_window_closed_message(project), "entryWindow": entry_window_status(project)}, HTTPStatus.FORBIDDEN)
             return
 
         scores = load_json(SCORES_PATH, {"scores": {}, "submissions": {}})
@@ -274,11 +277,23 @@ def first_query_value(query: dict, key: str) -> str:
     return str(values[0]).strip()
 
 
-def normalize_score_entry(entry: object) -> dict:
+def get_score_fields(project: dict) -> dict[str, str]:
+    fields = project.get("scoreFields")
+    if fields:
+        return {field["key"]: field["label"] for field in fields}
+    return SCORE_FIELDS
+
+
+def get_entry_window(project: dict) -> dict | None:
+    return project.get("entryWindow") or None
+
+
+def normalize_score_entry(entry: object, score_fields: dict[str, str] | None = None) -> dict:
     if not isinstance(entry, dict):
         entry = {}
+    fields = score_fields or SCORE_FIELDS
     normalized = {}
-    for key in SCORE_FIELDS:
+    for key in fields:
         value = entry.get(key, "")
         normalized[key] = normalize_score_value(value)
     normalized["comment"] = str(entry.get("comment", "")).strip()
@@ -301,14 +316,22 @@ def is_submitted(project_id: str, judge_id: str) -> bool:
     return bool(submissions.get(project_id, {}).get(judge_id))
 
 
+def missing_fields_for_entry(score_fields: dict[str, str], entry: dict) -> list[str]:
+    missing = []
+    for field_key, field_label in score_fields.items():
+        value = entry.get(field_key, "")
+        if value == "" or value is None:
+            missing.append(field_label)
+    return missing
+
+
 def missing_required_scores(project: dict, judge_scores: dict) -> list[dict]:
     missing = []
+    score_fields = get_score_fields(project)
     for team in project.get("teams", []):
         entry = judge_scores.get(team.get("id"), {})
-        for field_key, field_label in SCORE_FIELDS.items():
-            value = entry.get(field_key, "")
-            if value == "" or value is None:
-                missing.append({"teamId": team.get("id"), "teamName": team.get("name"), "field": field_label})
+        for field_label in missing_fields_for_entry(score_fields, entry):
+            missing.append({"teamId": team.get("id"), "teamName": team.get("name"), "field": field_label})
     return missing
 
 
@@ -372,6 +395,7 @@ def public_project(project: dict) -> dict:
         "id": project["id"],
         "name": project["name"],
         "status": project.get("status", "open"),
+        "scoreFields": project.get("scoreFields") or [{"key": key, "label": label} for key, label in SCORE_FIELDS.items()],
         "teams": project.get("teams", []),
         "judges": project.get("judges", []),
     }
@@ -381,25 +405,48 @@ def now_jst() -> datetime:
     return datetime.now(JST)
 
 
-def is_entry_window_open() -> bool:
+def is_entry_window_open(project: dict) -> bool:
+    window = get_entry_window(project)
+    if window is None:
+        return True
     current = now_jst()
-    return ENTRY_WINDOW_START <= current <= ENTRY_WINDOW_END
+    start = datetime.fromisoformat(window["start"])
+    end = datetime.fromisoformat(window["end"])
+    return start <= current <= end
 
 
-def entry_window_closed_message() -> str:
-    if now_jst() < ENTRY_WINDOW_START:
-        return f"入力開始前です。入力可能時間は {ENTRY_WINDOW_LABEL} です。"
-    return f"入力時間は終了しました。入力可能時間は {ENTRY_WINDOW_LABEL} でした。"
+def entry_window_closed_message(project: dict) -> str:
+    window = get_entry_window(project)
+    if window is None:
+        return ""
+    start = datetime.fromisoformat(window["start"])
+    label = window.get("label", "")
+    if now_jst() < start:
+        return f"入力開始前です。入力可能時間は {label} です。"
+    return f"入力時間は終了しました。入力可能時間は {label} でした。"
 
 
-def entry_window_status() -> dict:
+def entry_window_status(project: dict) -> dict:
+    window = get_entry_window(project)
+    if window is None:
+        return {
+            "open": True,
+            "restricted": False,
+            "label": None,
+            "start": None,
+            "end": None,
+            "now": now_jst().isoformat(),
+            "message": "入力受付中です。",
+        }
+    open_now = is_entry_window_open(project)
     return {
-        "open": is_entry_window_open(),
-        "label": ENTRY_WINDOW_LABEL,
-        "start": ENTRY_WINDOW_START.isoformat(),
-        "end": ENTRY_WINDOW_END.isoformat(),
+        "open": open_now,
+        "restricted": True,
+        "label": window.get("label", ""),
+        "start": window["start"],
+        "end": window["end"],
         "now": now_jst().isoformat(),
-        "message": "入力受付中です。" if is_entry_window_open() else entry_window_closed_message(),
+        "message": "入力受付中です。" if open_now else entry_window_closed_message(project),
     }
 
 

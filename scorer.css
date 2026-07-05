@@ -145,14 +145,14 @@ h2 {
   font-size: 1.15rem;
 }
 
-.judge-button.submitted {
+.judge-button.all-finalized {
   border-color: rgba(66, 198, 182, 0.7);
   background:
     linear-gradient(180deg, rgba(66, 198, 182, 0.2), rgba(0, 0, 0, 0.34)),
     rgba(16, 42, 44, 0.96);
 }
 
-.judge-button.submitted span {
+.judge-button.all-finalized span {
   color: #9ff0e6;
 }
 
@@ -273,7 +273,7 @@ h2 {
   color: #9ff0e6;
 }
 
-.score-team-card.is-submitted {
+.score-team-card.is-finalized {
   border-color: rgba(242, 193, 78, 0.64);
 }
 
@@ -444,12 +444,44 @@ h2 {
   min-height: 20px;
 }
 
+.score-team-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.score-team-footer .save-status {
+  justify-self: auto;
+}
+
+.finalize-button {
+  min-width: 132px;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  color: #170e06;
+  background: linear-gradient(180deg, #ffe68a, #c68b1e);
+  font-weight: 950;
+}
+
+.finalize-button:disabled {
+  cursor: not-allowed;
+  color: rgba(255, 248, 232, 0.56);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.score-team-card.is-finalized .finalize-button {
+  color: #9ff0e6;
+  background: rgba(66, 198, 182, 0.16);
+}
+
 .submit-panel {
   position: sticky;
   bottom: 14px;
   z-index: 5;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 14px;
   margin-top: 4px;
@@ -475,22 +507,7 @@ h2 {
   font-size: 0.96rem;
 }
 
-.submit-button {
-  min-width: 132px;
-  min-height: 52px;
-  border-radius: 8px;
-  color: #170e06;
-  background: linear-gradient(180deg, #ffe68a, #c68b1e);
-  font-weight: 950;
-}
-
-.submit-button:disabled {
-  cursor: not-allowed;
-  color: rgba(255, 248, 232, 0.56);
-  background: rgba(255, 255, 255, 0.09);
-}
-
-.submit-panel.submitted {
+.submit-panel.all-finalized {
   border-color: rgba(66, 198, 182, 0.5);
 }
 
@@ -547,7 +564,11 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .submit-button {
+  .score-team-footer {
+    flex-wrap: wrap;
+  }
+
+  .finalize-button {
     width: 100%;
   }
 }

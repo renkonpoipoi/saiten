@@ -2,22 +2,29 @@ from __future__ import annotations
 
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, request, send_from_directory
 
 from server import (
     ROOT,
+    entry_window_closed_message,
+    entry_window_status,
     find_judge,
     find_project,
     find_team,
+    is_entry_window_open,
     load_json,
     public_project,
 )
 from score_storage import (
+    AlreadyFinalizedError,
+    EntryNotFoundError,
+    IncompleteEntryError,
     SubmittedError,
     admin_summary_from_storage,
+    finalize_team_score,
     get_judge_scores,
     init_storage,
     is_submitted,
@@ -30,11 +37,6 @@ from score_storage import (
 app = Flask(__name__, static_folder=None)
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_urlsafe(32)
 init_storage()
-
-JST = timezone(timedelta(hours=9))
-ENTRY_WINDOW_START = datetime(2026, 7, 2, 14, 30, tzinfo=JST)
-ENTRY_WINDOW_END = datetime(2026, 7, 2, 16, 10, tzinfo=JST)
-ENTRY_WINDOW_LABEL = "2026年7月2日 14:30〜16:10"
 
 
 @app.get("/")
@@ -70,14 +72,17 @@ def get_scores():
         {
             "scores": get_judge_scores(project_id, judge_id),
             "submitted": is_submitted(project_id, judge_id),
-            "entryWindow": entry_window_status(),
+            "entryWindow": entry_window_status(project),
         }
     )
 
 
 @app.get("/api/entry-window")
 def entry_window():
-    return jsonify(entry_window_status())
+    project = find_project(request.args.get("projectId", "").strip() or default_project_id())
+    if not project:
+        return jsonify({"error": "Project was not found."}), 400
+    return jsonify(entry_window_status(project))
 
 
 @app.get("/api/result/summary")
@@ -110,7 +115,7 @@ def judge_session():
         {
             "session": judge_session_data,
             "project": public_project(project),
-            "entryWindow": entry_window_status(),
+            "entryWindow": entry_window_status(project),
         }
     )
 
@@ -126,13 +131,38 @@ def save_scores():
     team = find_team(project, team_id) if project else None
     if not project or not judge or not team:
         return jsonify({"error": "Project, judge, or team was not found."}), 400
-    if not is_entry_window_open():
-        return jsonify({"error": entry_window_closed_message(), "entryWindow": entry_window_status()}), 403
+    if not is_entry_window_open(project):
+        return jsonify({"error": entry_window_closed_message(project), "entryWindow": entry_window_status(project)}), 403
 
     try:
-        entry = save_score(project_id, judge_id, team_id, payload.get("entry", {}))
+        entry = save_score(project, judge_id, team_id, payload.get("entry", {}))
     except SubmittedError as exc:
         return jsonify({"error": str(exc)}), 409
+    return jsonify({"entry": entry})
+
+
+@app.post("/api/scores/finalize")
+def finalize_score():
+    payload = request.get_json(silent=True) or {}
+    project_id = str(payload.get("projectId", "")).strip()
+    judge_id = str(payload.get("judgeId", "")).strip()
+    team_id = str(payload.get("teamId", "")).strip()
+    project = find_project(project_id)
+    judge = find_judge(project, judge_id) if project else None
+    team = find_team(project, team_id) if project else None
+    if not project or not judge or not team:
+        return jsonify({"error": "Project, judge, or team was not found."}), 400
+    if not is_entry_window_open(project):
+        return jsonify({"error": entry_window_closed_message(project), "entryWindow": entry_window_status(project)}), 403
+
+    try:
+        entry = finalize_team_score(project, judge_id, team_id)
+    except EntryNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except AlreadyFinalizedError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except IncompleteEntryError as exc:
+        return jsonify({"error": "All fields are required before finalizing.", "missing": exc.missing}), 400
     return jsonify({"entry": entry})
 
 
@@ -145,8 +175,8 @@ def submit_scores():
     judge = find_judge(project, judge_id) if project else None
     if not project or not judge:
         return jsonify({"error": "Project or judge was not found."}), 400
-    if not is_entry_window_open():
-        return jsonify({"error": entry_window_closed_message(), "entryWindow": entry_window_status()}), 403
+    if not is_entry_window_open(project):
+        return jsonify({"error": entry_window_closed_message(project), "entryWindow": entry_window_status(project)}), 403
 
     ok, missing, submitted_at = submit_scores_to_storage(project, project_id, judge_id)
     if missing:
@@ -167,32 +197,6 @@ def static_files(filename: str):
 def default_project_id() -> str:
     projects = load_json(ROOT / "data" / "scoring_projects.json", {"projects": []}).get("projects", [])
     return str(projects[0].get("id", "")) if projects else ""
-
-
-def now_jst() -> datetime:
-    return datetime.now(JST)
-
-
-def is_entry_window_open() -> bool:
-    current = now_jst()
-    return ENTRY_WINDOW_START <= current <= ENTRY_WINDOW_END
-
-
-def entry_window_closed_message() -> str:
-    if now_jst() < ENTRY_WINDOW_START:
-        return f"入力開始前です。入力可能時間は {ENTRY_WINDOW_LABEL} です。"
-    return f"入力時間は終了しました。入力可能時間は {ENTRY_WINDOW_LABEL} でした。"
-
-
-def entry_window_status() -> dict:
-    return {
-        "open": is_entry_window_open(),
-        "label": ENTRY_WINDOW_LABEL,
-        "start": ENTRY_WINDOW_START.isoformat(),
-        "end": ENTRY_WINDOW_END.isoformat(),
-        "now": now_jst().isoformat(),
-        "message": "入力受付中です。" if is_entry_window_open() else entry_window_closed_message(),
-    }
 
 
 if __name__ == "__main__":
