@@ -7,7 +7,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from server import ROOT, SCORE_FIELDS, SCORES_PATH, missing_required_scores, normalize_score_entry
+from server import ROOT, SCORES_PATH, get_score_fields, missing_required_scores, normalize_score_entry
 
 
 DB_PATH = Path(os.environ.get("SCORE_DB_PATH", ROOT / "data" / "scores.sqlite3"))
@@ -158,8 +158,9 @@ def is_submitted(project_id: str, judge_id: str) -> bool:
     return row is not None
 
 
-def save_score(project_id: str, judge_id: str, team_id: str, entry: object) -> dict:
-    normalized = normalize_score_entry(entry)
+def save_score(project: dict, judge_id: str, team_id: str, entry: object) -> dict:
+    project_id = project["id"]
+    normalized = normalize_score_entry(entry, get_score_fields(project))
     updated_at = datetime.now(timezone.utc).isoformat()
     normalized["updatedAt"] = updated_at
     with _LOCK, connect() as conn:

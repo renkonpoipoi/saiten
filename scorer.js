@@ -22,7 +22,7 @@ const els = {
   changeJudgeButton: document.querySelector("#changeJudgeButton"),
 };
 
-const scoreFields = [
+const DEFAULT_SCORE_FIELDS = [
   { key: "originality", label: "独創性" },
   { key: "usefulness", label: "実用性" },
   { key: "design", label: "UI/UXデザイン" },
@@ -33,16 +33,18 @@ const scoreFields = [
 const initialParams = new URLSearchParams(window.location.search);
 const initialProjectId = initialParams.get("project") || "";
 const initialJudgeId = initialParams.get("judge") || "";
-const ENTRY_WINDOW_START = new Date("2026-07-02T14:30:00+09:00");
-const ENTRY_WINDOW_END = new Date("2026-07-02T16:10:00+09:00");
-const ENTRY_WINDOW_LABEL = "2026年7月2日 14:30〜16:10";
 
 let projects = [];
 let activeProject = null;
 let activeSession = null;
 let savedScores = {};
 let activeSubmitted = false;
+let activeEntryWindow = { open: true, restricted: false, label: null, start: null, end: null, message: "入力受付中です。" };
 const saveTimers = new Map();
+
+function currentScoreFields() {
+  return activeProject?.scoreFields?.length ? activeProject.scoreFields : DEFAULT_SCORE_FIELDS;
+}
 
 els.backToProjectsButton.addEventListener("click", () => showStep("project"));
 els.changeJudgeButton.addEventListener("click", () => showStep("judge"));
@@ -144,6 +146,7 @@ async function startJudgeSession(judgeId) {
     if (!response.ok) throw new Error(data.error || "入力画面を開始できませんでした。");
     activeProject = data.project;
     activeSession = data.session;
+    activeEntryWindow = data.entryWindow;
     savedScores = await loadScores(activeSession);
     renderEntry(activeSession);
     showStep("entry");
@@ -161,6 +164,7 @@ async function loadScores(session) {
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "保存済みの採点を読み込めませんでした。");
   activeSubmitted = Boolean(data.submitted);
+  if (data.entryWindow) activeEntryWindow = data.entryWindow;
   return data.scores || {};
 }
 
@@ -197,7 +201,7 @@ function renderEntry(session) {
 
     const scoreGrid = card.querySelector(".score-field-grid");
     const current = savedScores[team.id] || {};
-    scoreFields.forEach((field) => {
+    currentScoreFields().forEach((field) => {
       const label = document.createElement("label");
       label.className = "score-field";
       label.innerHTML = `
@@ -254,7 +258,7 @@ function renderEntry(session) {
 }
 
 function updateTeamTotal(card) {
-  const total = scoreFields.reduce((sum, field) => {
+  const total = currentScoreFields().reduce((sum, field) => {
     const input = card.querySelector(`[name="${field.key}"]`);
     return sum + (input.dataset.scored === "true" ? Number(input.value) : 0);
   }, 0);
@@ -313,7 +317,7 @@ async function saveTeamScore(teamId, card) {
 
 function collectTeamEntry(card) {
   const entry = {};
-  scoreFields.forEach((field) => {
+  currentScoreFields().forEach((field) => {
     const input = card.querySelector(`[name="${field.key}"]`);
     entry[field.key] = input.dataset.scored === "true" ? input.value : "";
   });
@@ -332,7 +336,7 @@ function updateSubmitState() {
     ? "提出済みです"
     : complete
       ? "提出できます。提出後は変更できません。"
-      : "3チームすべて入力すると提出できます";
+      : "すべてのチームを入力すると提出できます";
   els.submitButton.disabled = activeSubmitted || !complete || !windowOpen;
   updateEntryWindowNotice();
   els.scoreSheet.querySelectorAll(".score-team-card").forEach(updateTeamCardState);
@@ -342,7 +346,7 @@ function missingRequiredInputs() {
   const missing = [];
   els.scoreSheet.querySelectorAll(".score-team-card").forEach((card) => {
     const teamName = card.querySelector(".team-title strong").textContent;
-    scoreFields.forEach((field) => {
+    currentScoreFields().forEach((field) => {
       const input = card.querySelector(`[name="${field.key}"]`);
       if (input.dataset.scored !== "true") missing.push(`${teamName} ${field.label}`);
     });
@@ -415,13 +419,17 @@ async function loadProjectSummary(projectId) {
 }
 
 function isEntryWindowOpen(now = new Date()) {
-  return now >= ENTRY_WINDOW_START && now <= ENTRY_WINDOW_END;
+  if (!activeEntryWindow.restricted) return true;
+  return now >= new Date(activeEntryWindow.start) && now <= new Date(activeEntryWindow.end);
 }
 
 function inputWindowClosedMessage() {
+  if (!activeEntryWindow.restricted) return "";
   const now = new Date();
-  if (now < ENTRY_WINDOW_START) return `入力開始前です。入力可能時間は ${ENTRY_WINDOW_LABEL} です。`;
-  return `入力時間は終了しました。入力可能時間は ${ENTRY_WINDOW_LABEL} でした。`;
+  if (now < new Date(activeEntryWindow.start)) {
+    return `入力開始前です。入力可能時間は ${activeEntryWindow.label} です。`;
+  }
+  return `入力時間は終了しました。入力可能時間は ${activeEntryWindow.label} でした。`;
 }
 
 function updateEntryWindowNotice() {
@@ -430,7 +438,9 @@ function updateEntryWindowNotice() {
   els.inputWindowNotice.classList.toggle("closed", !open);
   els.inputWindowNotice.classList.toggle("open", open);
   els.inputWindowNotice.textContent = open
-    ? `入力受付中: ${ENTRY_WINDOW_LABEL}`
+    ? activeEntryWindow.restricted
+      ? `入力受付中: ${activeEntryWindow.label}`
+      : "入力受付中です"
     : inputWindowClosedMessage();
 }
 
@@ -441,7 +451,7 @@ function updateEntryWindowState() {
 }
 
 function isTeamEntered(card) {
-  return scoreFields.every((field) => {
+  return currentScoreFields().every((field) => {
     const input = card.querySelector(`[name="${field.key}"]`);
     return input?.dataset.scored === "true";
   });
