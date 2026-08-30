@@ -10,13 +10,23 @@ from datetime import datetime, timezone
 
 from app.errors import ConflictError, ValidationError
 from app.extensions import db
-from app.models import Criterion, Evaluation, EvaluationScore, Subject
+from app.models import Criterion, Evaluation, EvaluationScore, Project, Subject
 
 EVALUATION_STATUS_NOT_STARTED = "not_started"
 
 
 class AlreadySubmittedError(ConflictError):
     """確定済み(status='submitted')のEvaluationへの書き込みを拒否する際に送出する。"""
+
+
+class ScoringClosedError(ConflictError):
+    """Project.statusがSCORING以外(LOCKED以降)での書き込みを拒否する際に送出する。"""
+
+
+def _require_scoring_open(evaluation: Evaluation) -> None:
+    project = db.session.get(Project, evaluation.project_id)
+    if project is None or project.status != "SCORING":
+        raise ScoringClosedError("Scoring is not open for this project.")
 
 
 def _utcnow() -> datetime:
@@ -81,7 +91,12 @@ def get_evaluation_detail(evaluation: Evaluation) -> dict:
 
 
 def save_scores(evaluation: Evaluation, scores: dict, feedback: str | None) -> Evaluation:
-    """scores: {criterion_id(str/int): score(int)}. draft状態でのみ更新可能。"""
+    """scores: {criterion_id(str/int): score(int)}. draft状態でのみ更新可能。
+
+    Project.statusがSCORINGでない場合(LOCKED以降)は、Evaluation自体が
+    draftのままでも書き込みを拒否する。
+    """
+    _require_scoring_open(evaluation)
     if evaluation.status != "draft":
         raise AlreadySubmittedError("This evaluation has already been submitted.")
 
@@ -128,10 +143,14 @@ def save_scores(evaluation: Evaluation, scores: dict, feedback: str | None) -> E
 def submit_evaluation(evaluation: Evaluation) -> Evaluation:
     """draft -> submitted への不可逆遷移。全criteriaの採点が揃っていることを要求する。
 
-    既にsubmitted済みの場合は安全に扱う(冪等: エラーにせず現在の状態を返す)。
+    既にsubmitted済みの場合は安全に扱う(冪等: エラーにせず現在の状態を返す。
+    project状態に関わらず、実質的に書き込みが発生しない読み取り相当の
+    操作のため許可する)。
     """
     if evaluation.status == "submitted":
         return evaluation
+
+    _require_scoring_open(evaluation)
 
     criterion_ids = {
         c.id for c in Criterion.query.filter_by(project_id=evaluation.project_id).all()

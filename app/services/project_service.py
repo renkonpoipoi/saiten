@@ -387,6 +387,9 @@ def get_progress(project: Project) -> dict:
                 "scorer_id": scorer.id,
                 "display_name": scorer.display_name,
                 "is_host_scorer": scorer.is_host_scorer,
+                # subjectsと同じ並び順のstatus一覧(Host Dashboardの
+                # Scorer x Subjectマトリクス描画用)
+                "statuses": statuses,
                 "submitted_count": sum(1 for st in statuses if st == "submitted"),
                 "subject_count": len(subjects),
                 "eligible": scorer.id in eligible_ids,
