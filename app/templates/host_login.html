@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}ホストログイン - M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">ホストログイン</div>
+<section class="panel">
+  <h1>ホストコードでログイン</h1>
+  <form id="hostLoginForm">
+    <div class="field">
+      <label for="hostCodeInput">ホストコード</label>
+      <input type="text" id="hostCodeInput" autocomplete="off" required>
+    </div>
+    <button type="submit" class="primary">ログイン</button>
+  </form>
+  <p style="color:var(--muted); margin-top:16px;">
+    ホストコードを紛失し、有効なログイン状態も無い場合、このMVPでは復旧できません。
+  </p>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/host_login.js') }}"></script>
+{% endblock %}

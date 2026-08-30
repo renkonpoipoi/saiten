@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}参加 - M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">採点者として参加</div>
+<section class="panel">
+  <h1>参加コードを入力</h1>
+  <form id="joinForm">
+    <div class="field">
+      <label for="scorerCodeInput">参加コード</label>
+      <input type="text" id="scorerCodeInput" autocomplete="off" required>
+    </div>
+    <button type="submit" class="primary">参加する</button>
+  </form>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/join.js') }}"></script>
+{% endblock %}

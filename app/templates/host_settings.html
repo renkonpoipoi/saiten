@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Host Settings - M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">Host Settings</div>
+<h1 id="projectNameHeading">プロジェクト設定</h1>
+<p>状態: <span id="projectStatusBadge" class="badge">-</span>
+  <a href="#" id="hostDashboardLink" class="hidden">Host Dashboardへ</a>
+</p>
+
+<section class="panel" id="draftOnlyNotice">
+  <p style="color:var(--muted)">DRAFT状態の間のみ、プロジェクト構成(名前・被採点者・採点者・採点軸名)を編集できます。採点開始後は変更できません。</p>
+</section>
+
+<section class="panel">
+  <h2>プロジェクト名</h2>
+  <form id="projectNameForm">
+    <div class="field">
+      <input type="text" id="projectNameInput">
+    </div>
+    <button type="submit" class="primary" id="projectNameSaveButton">保存</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>被採点者</h2>
+  <div id="subjectRows" class="progress-grid"></div>
+  <form id="addSubjectForm" style="margin-top:12px; display:flex; gap:8px;">
+    <input type="text" id="newSubjectName" placeholder="新しい被採点者名">
+    <button type="submit" id="addSubjectButton">追加</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>採点軸(5個固定・名称のみ編集可)</h2>
+  <div id="criterionRows" class="progress-grid"></div>
+</section>
+
+<section class="panel">
+  <h2>採点者</h2>
+  <div id="scorerRows" class="progress-grid"></div>
+  <form id="addScorerForm" style="margin-top:12px; display:flex; gap:8px;">
+    <input type="text" id="newScorerName" placeholder="新しい採点者名">
+    <button type="submit" id="addScorerButton">追加</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>ホストコード</h2>
+  <p style="color:var(--muted)">紛失時のみ再発行してください。再発行すると旧コードは無効になります。</p>
+  <button type="button" id="regenerateHostCodeButton">ホストコードを再発行</button>
+  <div id="newHostCodeBox" class="code-box hidden" style="margin-top:12px;">
+    <code id="newHostCodeText"></code>
+    <button type="button" id="copyNewHostCodeButton">コピー</button>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>採点開始</h2>
+  <p style="color:var(--muted)">開始すると、有効な採点者×被採点者の組み合わせで採点が一括作成され、以降は構成変更ができなくなります。</p>
+  <button type="button" id="startScoringButton" class="primary">採点を開始する(DRAFT → SCORING)</button>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script>window.PROJECT_ID = {{ project_id }};</script>
+<script src="{{ url_for('static', filename='js/host_settings.js') }}"></script>
+{% endblock %}

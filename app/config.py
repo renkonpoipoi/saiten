@@ -97,8 +97,15 @@ def build_config(env: dict | None = None) -> dict:
             {
                 "SQLALCHEMY_DATABASE_URI": db_uri,
                 "SESSION_COOKIE_SECURE": False,
-                "WTF_CSRF_ENABLED": False,
-                "RATELIMIT_ENABLED": False,
+                # デフォルトはテスト簡略化のため無効。CSRF/rate limit自体を
+                # 検証したいテストは env_override で明示的に True を渡す。
+                # (Flask-LimiterのenabledはLimiter.init_app()実行時に固定
+                # されるため、app.config.update()による後からの変更は
+                # 反映されない。CSRFProtect側はリクエスト都度configを見る
+                # ため後から変更しても効くが、統一のためどちらもここで
+                # source経由の上書きを許可する)
+                "WTF_CSRF_ENABLED": bool(source.get("WTF_CSRF_ENABLED", False)),
+                "RATELIMIT_ENABLED": bool(source.get("RATELIMIT_ENABLED", False)),
             }
         )
     else:  # development

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}プロジェクト作成 - M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">プロジェクト作成</div>
+
+<section id="formPanel" class="panel">
+  <h1>新しいプロジェクトを作成</h1>
+  <form id="createForm">
+    <div class="field">
+      <label for="projectName">プロジェクト名</label>
+      <input type="text" id="projectName" required>
+    </div>
+
+    <div class="field">
+      <label>被採点者(チーム)</label>
+      <div id="subjectList" class="repeatable-list"></div>
+      <button type="button" class="ghost" id="addSubjectButton">+ 被採点者を追加</button>
+    </div>
+
+    <div class="field">
+      <label>採点者</label>
+      <div id="scorerList" class="repeatable-list"></div>
+      <button type="button" class="ghost" id="addScorerButton">+ 採点者を追加</button>
+    </div>
+
+    <div class="field">
+      <label>採点軸(5個固定・名称は自由・各20点)</label>
+      <div id="criterionList" class="repeatable-list"></div>
+    </div>
+
+    <div class="field">
+      <label><input type="checkbox" id="allowHostScoring"> ホスト自身も採点者に含める</label>
+    </div>
+
+    <button type="submit" class="primary">プロジェクトを作成</button>
+  </form>
+</section>
+
+<section id="createdPanel" class="panel hidden">
+  <h1>プロジェクトを作成しました</h1>
+  <p style="color:var(--muted)">このコードは今だけ表示されます。控えるかコピーしてください。再読み込みすると再表示できません。</p>
+
+  <h3>ホストコード</h3>
+  <div class="code-box"><code id="hostCodeText"></code><button type="button" data-copy-target="hostCodeText">コピー</button></div>
+
+  <h3>採点者コード</h3>
+  <table>
+    <thead><tr><th>採点者</th><th>コード</th><th></th></tr></thead>
+    <tbody id="scorerCodeTableBody"></tbody>
+  </table>
+
+  <p style="margin-top:20px;">
+    <a class="button" id="goToHostLoginLink">このコードでホストとしてログイン</a>
+  </p>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/project_create.js') }}"></script>
+{% endblock %}

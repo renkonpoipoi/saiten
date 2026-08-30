@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">M1風採点アプリ</div>
+<h1>ようこそ</h1>
+<p style="color:var(--muted)">プロジェクトを新しく作るか、配布されたコードで参加してください。</p>
+<div class="home-actions">
+  <a class="button primary" href="{{ url_for('pages.project_create') }}">プロジェクト作成</a>
+  <a class="button" href="{{ url_for('pages.join_page') }}">採点者として参加</a>
+  <a class="button" href="{{ url_for('pages.host_login_page') }}">ホストとしてログイン</a>
+</div>
+{% endblock %}

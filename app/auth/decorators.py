@@ -1,14 +1,11 @@
-"""API/画面ルートに付与する権限チェックデコレータの枠組み。
+"""API/画面ルートに付与する権限チェックデコレータ。
 
 権限チェックは常にサーバー側で完結させ、フロントの表示制御(ボタンdisabled等)
 はUXのためだけに存在させる(実装計画 v1 10節)。
 
-Host権限は session["host_project_ids"] 起因、Scorer権限は session["scorer_id"]
+Host権限は session["host_project_id"] 起因、Scorer権限は session["scorer_id"]
 起因でそれぞれ独立に判定し、Scorer.is_host_scorer(表示用フラグ)は権限判定に
 一切使わない(実装計画 v2 11節)。
-
-Phase 1時点ではJoin/Host Loginがまだ存在しないため、デコレータの形だけを
-用意する(未接続)。実際のセッション検証ロジックはPhase 2で実装する。
 """
 
 from __future__ import annotations
@@ -16,22 +13,53 @@ from __future__ import annotations
 from functools import wraps
 from typing import Callable
 
+from flask import session
+
+from app.errors import ForbiddenError
+
 
 def require_host(view_func: Callable) -> Callable:
-    """対象project_idについてHostセッションを持つことを要求する(Phase 2で実装)。"""
+    """URLの project_id と session["host_project_id"] の一致を要求する。
+
+    project_id はルートの<int:project_id>から渡される想定。
+    """
 
     @wraps(view_func)
     def wrapper(*args, **kwargs):
-        raise NotImplementedError("Phase 2 で実装予定")
+        project_id = kwargs.get("project_id")
+        if project_id is None:
+            raise ForbiddenError("project_id is required for host authorization.")
+        if session.get("host_project_id") != project_id:
+            raise ForbiddenError("Host session required for this project.")
+        return view_func(*args, **kwargs)
 
     return wrapper
 
 
 def require_scorer(view_func: Callable) -> Callable:
-    """Scorerセッションを持つことを要求する(Phase 2で実装)。"""
+    """Scorerセッション(session["scorer_id"])を持つことを要求する。
+
+    採点対象(evaluation等)がそのScorer本人のものであるかの照合は、
+    呼び出し先のroute/service側で個別に行う(cross-project/他者データへの
+    アクセスを防ぐため)。
+    """
 
     @wraps(view_func)
     def wrapper(*args, **kwargs):
-        raise NotImplementedError("Phase 2 で実装予定")
+        if not session.get("scorer_id"):
+            raise ForbiddenError("Scorer session required.")
+        return view_func(*args, **kwargs)
 
     return wrapper
+
+
+def current_scorer_id() -> int | None:
+    return session.get("scorer_id")
+
+
+def current_scorer_project_id() -> int | None:
+    return session.get("scorer_project_id")
+
+
+def current_host_project_id() -> int | None:
+    return session.get("host_project_id")
