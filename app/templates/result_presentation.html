@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}結果発表 - M1風採点アプリ{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/reveal.css') }}">
+{% endblock %}
+{% block content %}
+<div class="eyebrow">結果発表</div>
+
+<section id="standbyPanel" class="panel">
+  <h1>結果発表の準備ができました</h1>
+  <p style="color:var(--muted)">開始すると、被採点者ごとに得点が順番に開示されます。</p>
+  <button type="button" id="startRevealButton" class="primary">結果発表を開始する</button>
+</section>
+
+<section id="revealStage" class="reveal-stage hidden">
+  <div class="reveal-board">
+    <div class="reveal-eyebrow">REVEALING</div>
+    <div class="reveal-subject-name" id="revealSubjectName">-</div>
+    <div class="reveal-judges" id="revealJudgeRow"></div>
+    <div class="reveal-total" id="revealTotal">0</div>
+  </div>
+</section>
+
+<section id="rankingPanel" class="panel hidden">
+  <h1>最終ランキング</h1>
+  <div id="rankingList" class="ranking-list"></div>
+  <button type="button" id="finishButton" class="primary hidden">発表を終了する(PRESENTING &rarr; FINISHED)</button>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script>window.PROJECT_ID = {{ project_id }};</script>
+<script src="{{ url_for('static', filename='js/result_presentation.js') }}"></script>
+{% endblock %}

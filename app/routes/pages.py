@@ -40,6 +40,11 @@ def host_dashboard_page(project_id: int):
     return render_template("host_dashboard.html", project_id=project_id)
 
 
+@pages_bp.get("/host/<int:project_id>/present")
+def result_presentation_page(project_id: int):
+    return render_template("result_presentation.html", project_id=project_id)
+
+
 @pages_bp.get("/scorer")
 def scorer_dashboard_page():
     return render_template("scorer_dashboard.html")
