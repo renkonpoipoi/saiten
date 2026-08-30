@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}採点 - M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">採点</div>
+<h1 id="subjectNameHeading">読み込み中...</h1>
+<p><a href="/scorer" style="color:var(--muted)">&larr; Scorer Dashboardへ戻る</a></p>
+<div id="statusNotice" class="panel hidden"></div>
+<div id="criteriaContainer"></div>
+<div class="field">
+  <label for="feedbackInput">フィードバック</label>
+  <textarea id="feedbackInput" maxlength="500"></textarea>
+</div>
+<p id="saveStatus" style="color:var(--muted)"></p>
+<button type="button" id="submitButton" class="primary">この採点を確定する</button>
+{% endblock %}
+{% block extra_js %}
+<script>window.SUBJECT_ID = {{ subject_id }};</script>
+<script src="{{ url_for('static', filename='js/scoring.js') }}"></script>
+{% endblock %}

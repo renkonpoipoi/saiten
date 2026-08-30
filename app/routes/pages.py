@@ -33,3 +33,13 @@ def join_page():
 @pages_bp.get("/host/<int:project_id>/settings")
 def host_settings_page(project_id: int):
     return render_template("host_settings.html", project_id=project_id)
+
+
+@pages_bp.get("/scorer")
+def scorer_dashboard_page():
+    return render_template("scorer_dashboard.html")
+
+
+@pages_bp.get("/scorer/subjects/<int:subject_id>")
+def scoring_page(subject_id: int):
+    return render_template("scoring.html", subject_id=subject_id)

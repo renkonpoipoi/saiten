@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Scorer Dashboard - M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">Scorer Dashboard</div>
+<h1>担当する被採点者</h1>
+<p id="progressSummary" style="color:var(--muted)"></p>
+<div id="subjectRows" class="progress-grid"></div>
+{% endblock %}
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/scorer_dashboard.js') }}"></script>
+{% endblock %}
