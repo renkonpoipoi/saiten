@@ -26,9 +26,30 @@ def create_app(env_override: dict | None = None) -> Flask:
     from app import models  # noqa: F401
 
     _register_error_handlers(app)
+    _register_security_headers(app)
     _register_blueprints(app)
 
     return app
+
+
+def _register_security_headers(app: Flask) -> None:
+    """低コストで副作用の少ないHTTP security headerを付与する。
+
+    script-src/style-srcを含む本格的なCSPは、現構成が
+    (a) テンプレート内のinline <script>によるID受け渡し
+    (b) 多数のinline style属性
+    に依存しているため、nonce基盤の追加なしには導入できない。
+    今回はframe-ancestors(フレーム埋め込み制御のみでJS/CSSに影響しない)に
+    留め、完全なCSPはPhase 7以降の課題とする。
+    """
+
+    @app.after_request
+    def _apply_security_headers(response):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        return response
 
 
 def _register_error_handlers(app: Flask) -> None:

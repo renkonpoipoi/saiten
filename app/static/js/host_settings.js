@@ -77,8 +77,10 @@
         deleteButton.textContent = "削除";
         deleteButton.className = "danger";
         deleteButton.addEventListener("click", async () => {
+          if (!confirm(`被採点者「${subject.name}」を削除しますか?この操作は取り消せません。`)) return;
           try {
             await apiFetch(`/api/projects/${projectId}/subjects/${subject.id}`, { method: "DELETE" });
+            showMessage(`「${subject.name}」を削除しました`);
             await load();
           } catch (err) {
             showMessage(err.message, { isError: true });
@@ -164,8 +166,10 @@
         deleteButton.textContent = "削除";
         deleteButton.className = "danger";
         deleteButton.addEventListener("click", async () => {
+          if (!confirm(`採点者「${scorer.display_name}」を削除しますか?発行済みの参加コードも使えなくなります。`)) return;
           try {
             await apiFetch(`/api/projects/${projectId}/scorers/${scorer.id}`, { method: "DELETE" });
+            showMessage(`「${scorer.display_name}」を削除しました`);
             await load();
           } catch (err) {
             showMessage(err.message, { isError: true });

@@ -8,6 +8,16 @@
   <a href="#" id="presentLink" class="hidden" style="margin-left:12px;">結果発表へ</a>
 </p>
 
+<div id="draftNotice" class="panel hidden" style="border-color:var(--gold);">
+  <h2>まだ採点は始まっていません(DRAFT)</h2>
+  <p style="color:var(--muted)">被採点者・採点者・採点軸名の編集と、採点の開始はSettingsから行います。</p>
+  <a class="button primary" id="draftSettingsLink" href="#">Settingsを開く</a>
+</div>
+
+<div id="connectionWarning" class="panel hidden" style="border-color:var(--red);">
+  接続エラーのため自動更新が一時的に失敗しています。画面の内容が最新でない可能性があります。
+</div>
+
 <section class="panel">
   <h2>進捗サマリー</h2>
   <p id="progressSummary" style="color:var(--muted)"></p>
@@ -15,6 +25,7 @@
     eligible scorer(公式集計対象): <strong id="eligibleCount">-</strong> /
     incomplete scorer: <strong id="incompleteCount">-</strong>
   </p>
+  <p id="pollingIndicator" style="color:var(--muted); font-size:.85rem;"></p>
 </section>
 
 <section class="panel">
