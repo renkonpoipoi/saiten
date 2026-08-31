@@ -57,7 +57,10 @@ DRAFT → SCORING → LOCKED → PRESENTING → FINISHED
 
 ### 必要環境
 
-- Python 3.12以降(開発・動作確認は3.14で実施)
+- Python **3.14.4**(リポジトリルートの `.python-version` で固定)
+
+Renderは `.python-version` を読み取ってランタイムのPythonバージョンを決定します。
+ローカルと本番でバージョンを揃えるため、このファイルは削除しないでください。
 
 ### セットアップ
 
@@ -131,6 +134,47 @@ export SECRET_KEY=<ローカル用の任意の文字列>
   (アプリ実行時の `DATABASE_URL` には pooled connection を指定します)。
 - マイグレーションはWebサーバー起動時に自動実行しません。デプロイのbuild段階で
   適用します。破壊的なスキーマ変更は expand/contract 方式で分割してください。
+
+### Render 設定値
+
+| 項目 | 値 |
+|---|---|
+| Build Command | `pip install -r requirements.txt && flask --app wsgi:app db upgrade` |
+| Start Command | `gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 1` |
+| Health Check Path | `/healthz` |
+| Python Version | `.python-version`(3.14.4)で自動決定 |
+
+環境変数(値はRender Dashboardへ直接入力し、リポジトリには保存しません):
+
+| 変数 | 値の種類 |
+|---|---|
+| `APP_ENV` | `production` |
+| `SECRET_KEY` | 十分に長いランダム文字列 |
+| `DATABASE_URL` | Neon **pooled** connection(ホスト名に `-pooler` を含む) |
+| `MIGRATION_DATABASE_URL` | Neon **direct** connection(`-pooler` を含まない) |
+
+Render Free Web Service では Pre-Deploy Command が使えないため、
+マイグレーションは Build Command 内で実行します。
+
+### 安全なデプロイ手順(事故防止)
+
+既存のRender Web Serviceを再利用するため、Auto-Deployが有効なまま
+ブランチをmainへマージすると意図せず本番デプロイが発火します。
+本番切替は必ず次の順序で行ってください。
+
+1. Render の **Auto-Deploy を一時的に Off** にする
+2. Neon Free プロジェクトを作成し、pooled / direct 両方の接続文字列を取得する
+3. Render の環境変数・Build Command・Start Command・Health Check Path を設定する
+4. `feature/unified-scoring-app` で検証済みのコミットを本番候補として扱う
+5. 手動デプロイを実行する
+6. production smoke test を実施する
+7. 問題がなければ main への統合方針を決める
+8. 最後に Auto-Deploy を再設定する
+
+**feature ブランチをいきなり main へマージして Auto-Deploy を発火させないでください。**
+
+新統合アプリの smoke test が完全に成功するまで、旧 result アプリの
+Render Service は削除・停止・設定変更しないでください。
 
 ## 運用注意
 

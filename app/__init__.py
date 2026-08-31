@@ -67,6 +67,7 @@ def _register_error_handlers(app: Flask) -> None:
 
 
 def _register_blueprints(app: Flask) -> None:
+    from app.routes.health import health_bp
     from app.routes.pages import pages_bp
     from app.routes.api_auth import api_auth_bp
     from app.routes.api_projects import api_projects_bp
@@ -74,6 +75,7 @@ def _register_blueprints(app: Flask) -> None:
     from app.routes.api_host import api_host_bp
     from app.routes.api_result import api_result_bp
 
+    app.register_blueprint(health_bp)
     app.register_blueprint(pages_bp)
     app.register_blueprint(api_auth_bp)
     app.register_blueprint(api_projects_bp)
