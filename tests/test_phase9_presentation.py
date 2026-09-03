@@ -1,0 +1,405 @@
+"""Phase 9: Presentation の DOM 契約と、設計上の絶対条件の静的検査。
+
+ここで守るのは主に4つ。
+  1. running total を復活させない(Judge全員のあとにだけ TOTAL が出る)
+  2. 演出 runner の内部からサーバーへ POST しない
+     (animation の完了だけで lifecycle を進めないため)
+  3. 1クリック = 1つの意味のある演出sequence(BATCHは被採点者単位で停止する)
+  4. Presentation に Radar / 記述回答を持ち込まない(Analysis へ分離したまま)
+
+演出の順序・尺・分岐そのものは純粋関数として tests/js/core.test.mjs で
+検証している(実時間を待たない)。ここはその外側の契約だけを見る。
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from tests.helpers import create_project, start_scoring
+
+APP_DIR = Path(__file__).resolve().parent.parent / "app"
+JS_DIR = APP_DIR / "static" / "js"
+PRESENTATION_JS_DIR = JS_DIR / "presentation"
+
+
+def _presentation_js() -> str:
+    return (JS_DIR / "result_presentation.js").read_text(encoding="utf-8")
+
+
+def _reveal_css() -> str:
+    return (APP_DIR / "static" / "css" / "reveal.css").read_text(encoding="utf-8")
+
+
+def _function_body(js: str, signature: str) -> str:
+    """波括弧の対応を数えて関数本体を切り出す(正規表現より壊れにくい)。"""
+    start = js.index(signature)
+    open_brace = js.index("{", start)
+    depth = 0
+    for index in range(open_brace, len(js)):
+        if js[index] == "{":
+            depth += 1
+        elif js[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return js[open_brace + 1:index]
+    raise AssertionError(f"unbalanced braces after {signature!r}")
+
+
+def _present_html(client) -> str:
+    created = create_project(client)
+    return client.get(f"/host/{created['project_id']}/present").get_data(as_text=True)
+
+
+# ---------------------------------------------------------------------------
+# DOM 契約
+# ---------------------------------------------------------------------------
+
+
+def test_presentation_page_has_the_phase9_stage(client, db):
+    html = _present_html(client)
+    for element_id in (
+        "presentationRoot",
+        "revealStage",
+        "revealEyebrow",
+        "revealSubjectName",
+        "revealJudgeRow",
+        "activeJudgeCard",
+        "activeJudgeName",
+        "activeJudgeScore",
+        "revealTotal",
+        "revealTotalValue",
+        "stageControls",
+        "fullscreenButton",
+        "skipButton",
+    ):
+        assert f'id="{element_id}"' in html, element_id
+
+
+def test_active_judge_card_is_a_separate_layer_from_the_rail(client, db):
+    """下部railのslotをDOM上で動かさず、中央は別要素で表現していること。"""
+    html = _present_html(client)
+    rail = re.search(r'<footer class="p-rail" id="revealJudgeRow"[^>]*>(.*?)</footer>', html, re.S)
+    assert rail, "judge railが見つからない"
+    # railの中身はJSが組み立てるので、テンプレート側にactive cardが混ざっていないこと
+    assert "activeJudgeCard" not in rail.group(1)
+    assert 'id="activeJudgeCard"' in html
+
+
+def test_batch_progress_panels_exist(client, db):
+    html = _present_html(client)
+    for element_id in (
+        "batchSubjectPanel",
+        "batchSubjectName",
+        "batchRevealButton",
+        "batchAdvancePanel",
+        "batchAdvanceButton",
+        "batchAdvanceNote",
+    ):
+        assert f'id="{element_id}"' in html, element_id
+
+
+def test_all_presentation_dom_ids_referenced_by_js_exist(client, db):
+    """result_presentation.js / presentation/*.js が参照するidが全て存在すること。"""
+    html = _present_html(client)
+    sources = [_presentation_js()] + [
+        path.read_text(encoding="utf-8") for path in sorted(PRESENTATION_JS_DIR.glob("*.js"))
+    ]
+    for source in sources:
+        for element_id in re.findall(r'getElementById\("([^"]+)"\)', source):
+            assert f'id="{element_id}"' in html, element_id
+
+
+def test_presentation_scripts_are_loaded_in_dependency_order(client, db):
+    html = _present_html(client)
+    order = [
+        "assets/sfx/manifest.js",
+        "js/presentation/core.js",
+        "js/presentation/audio.js",
+        "js/presentation/stage.js",
+        "js/result_presentation.js",
+    ]
+    positions = [html.index(path) for path in order]
+    assert positions == sorted(positions), "依存順にscriptを読み込んでいない"
+
+
+def test_presentation_page_is_full_bleed_without_touching_other_pages(client, db):
+    """発表画面だけ app-shell の 960px 制約を外していること。"""
+    html = _present_html(client)
+    assert 'class="presentation-body"' in html
+
+    css = _reveal_css()
+    assert ".presentation-body .app-shell" in css
+    assert "max-width: none" in css
+
+    # 共通CSSは無変更(他ページのresponsiveを壊さない)
+    common = (APP_DIR / "static" / "css" / "common.css").read_text(encoding="utf-8")
+    assert "max-width: 960px" in common
+    assert "presentation" not in common
+
+    # 他ページには body class が付かない
+    other = client.get("/host/login").get_data(as_text=True)
+    assert 'class="presentation-body"' not in other
+
+
+# ---------------------------------------------------------------------------
+# P0: running total の完全廃止
+# ---------------------------------------------------------------------------
+
+
+def test_running_total_is_gone(client, db):
+    js = _presentation_js()
+    assert "runningTotal" not in js
+    assert "judge-score-bubble" not in js
+    assert "judge-score-bubble" not in _reveal_css()
+
+
+def test_total_is_revealed_only_after_every_judge(client, db):
+    """TOTAL の描画は ALL_SETTLED より後の phase からしか呼ばれないこと。"""
+    js = _presentation_js()
+    body = _function_body(js, "function applySubjectStep(")
+    assert body.index('case "ALL_SETTLED"') < body.index('case "TOTAL_ENTER"')
+    # TOTAL を出すのは TOTAL_ENTER の1箇所だけ
+    assert body.count("stage.revealTotal(") == 1
+
+    stage_js = (PRESENTATION_JS_DIR / "stage.js").read_text(encoding="utf-8")
+    settle = _function_body(stage_js, "function settleJudge(")
+    assert "revealTotal" not in settle, "Judge開示のたびに合計を出してはいけない"
+    assert "totalValue" not in settle
+
+
+# ---------------------------------------------------------------------------
+# animation と server lifecycle の分離
+# ---------------------------------------------------------------------------
+
+
+def test_the_animation_runner_never_talks_to_the_server(client, db):
+    """演出 runner の内部から POST しない(完了だけで status を進めない)。"""
+    js = _presentation_js()
+    for signature in (
+        "async function runSteps(",
+        "async function playSequence(",
+        "function applySubjectStep(",
+        "function skipCurrentSequence(",
+    ):
+        body = _function_body(js, signature)
+        for token in ("apiFetch", "fetch(", "target_status", "transition"):
+            assert token not in body, f"{signature}: {token}"
+
+
+def test_presentation_engine_modules_never_talk_to_the_server(client, db):
+    for path in sorted(PRESENTATION_JS_DIR.glob("*.js")):
+        source = path.read_text(encoding="utf-8")
+        for token in ("apiFetch", "XMLHttpRequest", "target_status", "/api/"):
+            assert token not in source, f"{path.name}: {token}"
+
+
+def test_lifecycle_posts_only_happen_in_explicit_host_actions(client, db):
+    """状態遷移はHostのclickハンドラの中だけで起きること。"""
+    js = _presentation_js()
+    for match in re.finditer(r'target_status: (?:target|"[A-Z]+")', js):
+        prefix = js[: match.start()]
+        handler = prefix.rfind('addEventListener("click"')
+        assert handler != -1, "clickハンドラの外から状態遷移している"
+        # 直近のclickハンドラより後ろに関数定義境界が無いこと(=ハンドラ内にある)
+        assert "async function" not in js[handler:match.start()]
+
+
+def test_skip_only_advances_the_animation(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "function skipCurrentSequence(")
+    for token in ("apiFetch", "target_status", "transition", "present"):
+        assert token not in body, token
+    # sequenceの正しい最終状態へ進めてから停止点のUIを出す
+    assert "finalState()" in body
+    assert "onComplete()" in body
+
+
+def test_fullscreen_failure_never_breaks_the_presentation(client, db):
+    js = _presentation_js()
+    start = js.index('getElementById("fullscreenButton")')
+    body = js[start:start + 900]
+    assert "requestFullscreen" in body
+    assert "catch" in body
+
+
+# ---------------------------------------------------------------------------
+# 1クリック = 1つの意味のある演出sequence
+# ---------------------------------------------------------------------------
+
+
+def test_batch_stops_after_every_subject(client, db):
+    """BATCHが全被採点者を通しで自動再生しないこと。"""
+    js = _presentation_js()
+    assert "runRevealSequence" not in js, "全Subject連続再生は廃止した"
+
+    body = _function_body(js, 'getElementById("batchRevealButton").addEventListener')
+    # 1クリックで扱うのは1組だけ
+    assert "batchOrder[batchIndex]" in body
+    assert "for (" not in body and "forEach" not in body
+    assert "showBatchAdvance" in body
+
+
+def test_batch_advance_is_a_pure_ui_step(client, db):
+    """「次の被採点者へ」はサーバーに触れない。"""
+    js = _presentation_js()
+    body = _function_body(js, 'getElementById("batchAdvanceButton").addEventListener')
+    for token in ("apiFetch", "target_status", "transition"):
+        assert token not in body, token
+
+
+def test_batch_advance_button_switches_label_on_the_last_subject(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "function showBatchAdvance(")
+    assert "次の被採点者へ" in body
+    assert "最終ランキングを発表する" in body
+    assert "isLastBatchSubject()" in body
+
+
+def test_judges_are_never_clicked_one_by_one(client, db):
+    """Judge1人ごとのクリックを要求するUIが無いこと。"""
+    html = _present_html(client)
+    js = _presentation_js()
+    assert "judgeNextButton" not in html
+    assert "nextJudgeButton" not in html
+    # Judgeの進行はstep配列に閉じている
+    assert "core.buildSubjectSteps(" in js
+
+
+def test_both_modes_share_one_reveal_engine(client, db):
+    js = _presentation_js()
+    assert js.count("async function revealSubjectSequence(") == 1
+    assert "await revealSubjectSequence(subject, showBatchAdvance)" in js
+    assert "await revealSubjectSequence(payload.subject," in js
+
+
+# ---------------------------------------------------------------------------
+# 演出中の再入・二重進行
+# ---------------------------------------------------------------------------
+
+
+def test_reentrancy_is_guarded_by_a_run_token(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "async function runSteps(")
+    assert "runToken += 1" in body
+    assert "token !== runToken" in body
+
+
+def test_polling_is_not_restarted_while_a_sequence_runs(client, db):
+    """SEQUENTIALのpolling安全弁が残っていること(Phase 8Bからの引き継ぎ)。"""
+    js = _presentation_js()
+    assert "SEQUENTIAL_POLL_INTERVAL_MS = 15000" in js
+    assert "document.hidden" in js
+    assert "pollInFlight" in js
+    assert "stopPolling" in js
+
+
+# ---------------------------------------------------------------------------
+# 視覚設計 token / Judge数対応
+# ---------------------------------------------------------------------------
+
+
+def test_presentation_design_tokens_are_defined(client, db):
+    css = _reveal_css()
+    for token in (
+        "--p-bg-0",
+        "--p-panel",
+        "--p-gold",
+        "--p-gold-hi",
+        "--p-red",
+        "--p-ivory",
+        "--p-sub",
+        "--p-gold-grad",
+        "--u:",
+    ):
+        assert token in css, token
+    # Goldはベタ塗りにしない
+    assert "#FFD700" not in css.upper().replace("#FFD700", "#FFD700")
+    assert "ffd700" not in css.lower()
+
+
+def test_presentation_avoids_fragile_css_features(client, db):
+    """対象外ブラウザでも静かに壊れない書き方に留めていること(コメントは除外)。"""
+    css = re.sub(r"/\*.*?\*/", "", _reveal_css(), flags=re.S)
+    assert ":has(" not in css
+    assert "container-type" not in css
+    assert "cqw" not in css
+
+
+def test_reduced_motion_fallback_exists(client, db):
+    css = _reveal_css()
+    assert "prefers-reduced-motion" in css
+
+
+def test_unrevealed_scores_use_a_dash_not_a_question_mark(client, db):
+    stage_js = (PRESENTATION_JS_DIR / "stage.js").read_text(encoding="utf-8")
+    assert 'UNREVEALED = "—"' in stage_js
+    assert '"?"' not in stage_js
+
+
+def test_rail_layout_is_driven_by_css_custom_properties(client, db):
+    stage_js = (PRESENTATION_JS_DIR / "stage.js").read_text(encoding="utf-8")
+    assert 'setProperty("--cols"' in stage_js
+    assert 'setProperty("--slot-scale"' in stage_js
+    css = _reveal_css()
+    assert "repeat(var(--cols)" in css
+
+
+def test_timing_is_pushed_from_js_into_css_variables(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "function applyTiming(")
+    assert "core.timingCssVars(" in body
+    assert "setProperty" in body
+    css = _reveal_css()
+    assert "var(--t-judge-enter)" in css
+
+
+# ---------------------------------------------------------------------------
+# Analysis との分離 (Phase 8A の方針を維持)
+# ---------------------------------------------------------------------------
+
+
+def test_presentation_has_no_analysis_widgets(client, db):
+    html = _present_html(client)
+    assert "radar_chart.js" not in html
+    for source in [_presentation_js()] + [
+        p.read_text(encoding="utf-8") for p in sorted(PRESENTATION_JS_DIR.glob("*.js"))
+    ]:
+        assert "RadarChart" not in source
+        assert "radar" not in source.lower()
+        assert "feedback" not in source.lower()
+
+
+# ---------------------------------------------------------------------------
+# 既存の導線 (Phase 8D) を壊していないこと
+# ---------------------------------------------------------------------------
+
+
+def test_phase8d_navigation_survives_the_redesign(client, db):
+    html = _present_html(client)
+    panel = re.search(r'<section id="rankingPanel".*?</section>', html, re.S)
+    assert panel
+    for element_id in (
+        "rankingActions",
+        "finishButton",
+        "replayButton",
+        "backToDashboardLink",
+        "finishedAnalysisLink",
+    ):
+        assert f'id="{element_id}"' in panel.group(0), element_id
+
+
+def test_sequential_panels_are_untouched(client, app, db):
+    created = create_project(client, presentation_mode="SEQUENTIAL")
+    start_scoring(client, created["project_id"])
+    html = client.get(f"/host/{created['project_id']}/present").get_data(as_text=True)
+    for element_id in (
+        "sequentialWaitingPanel",
+        "sequentialStandbyPanel",
+        "sequentialDashboardLink",
+        "confirmNextPanel",
+        "confirmNextButton",
+        "finalRankingPanel",
+        "finalRankingButton",
+    ):
+        assert f'id="{element_id}"' in html, element_id

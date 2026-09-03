@@ -24,7 +24,7 @@
 
 {# BATCHの次アクション。ラベルは最終被採点者かどうかでJSが切り替える
    (「次の被採点者へ」/「最終ランキングを発表する」)。 #}
-<section id="batchAdvancePanel" class="panel hidden">
+<section id="batchAdvancePanel" class="panel p-prompt hidden">
   <p id="batchAdvanceNote" style="color:var(--muted)"></p>
   <button type="button" id="batchAdvanceButton" class="primary">次の被採点者へ</button>
 </section>
@@ -51,7 +51,7 @@
   <button type="button" id="revealSubjectButton" class="primary">得点発表を始める</button>
 </section>
 
-<section id="confirmNextPanel" class="panel hidden">
+<section id="confirmNextPanel" class="panel p-prompt hidden">
   <h2>この結果を確定しますか?</h2>
   <p style="color:var(--muted)">確定すると発表済みになり、次の被採点者の採点が始まります。</p>
   <button type="button" id="confirmNextButton" class="primary">確定して次へ</button>
@@ -60,7 +60,7 @@
 {# SEQUENTIALの最終確定。演出は既にFINAL RANKINGまで完了しており、
    ここを押したときだけ server の状態遷移を実行する
    (animationの完了だけでlifecycleを進めない)。 #}
-<section id="finalRankingPanel" class="panel hidden">
+<section id="finalRankingPanel" class="panel p-prompt hidden">
   <h2>最終結果を確定しますか?</h2>
   <p style="color:var(--muted)">確定すると発表済みとして記録され、結果分析などの導線が開きます。</p>
   <button type="button" id="finalRankingButton" class="primary">最終結果を確定する</button>
@@ -130,5 +130,6 @@
 <script src="{{ url_for('static', filename='assets/sfx/manifest.js') }}"></script>
 <script src="{{ url_for('static', filename='js/presentation/core.js') }}"></script>
 <script src="{{ url_for('static', filename='js/presentation/audio.js') }}"></script>
+<script src="{{ url_for('static', filename='js/presentation/stage.js') }}"></script>
 <script src="{{ url_for('static', filename='js/result_presentation.js') }}"></script>
 {% endblock %}

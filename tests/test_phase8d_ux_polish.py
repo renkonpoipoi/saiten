@@ -551,15 +551,18 @@ def test_scorer_dashboard_project_status_across_lifecycle(client, app, db):
 # ---------------------------------------------------------------------------
 
 
-def test_reveal_engine_is_untouched():
-    """演出のタイミング・running total・カード配置はPhase 9まで変更しない。"""
+def test_reveal_engine_was_rebuilt_in_phase9():
+    """Phase 8Dのスコープ境界ガードをPhase 9の仕様へ差し替えたもの。
+
+    Phase 8Dでは「演出を変更していないこと」を証明するために running total と
+    暫定カード配置の存在を検証していた。Phase 9ではその running total 廃止が
+    P0仕様なので、逆に「無いこと」を検証する。
+    Final RankingにRadar / 記述回答を統合しない方針は引き続き維持する。
+    """
     js = _presentation_js()
-    assert js.count("async function revealSubject(") == 1
-    assert "let runningTotal = 0;" in js
-    assert "await wait(500);" in js
-    assert "await wait(700);" in js
-    assert "judge-score-bubble" in js
-    # Final RankingにRadar / Feedbackを統合していない
+    assert "runningTotal" not in js, "running total は Phase 9 で完全廃止した"
+    assert "judge-score-bubble" not in js, "旧カード配置は撤去した"
+    assert js.count("async function revealSubjectSequence(") == 1
     assert "radar" not in js.lower()
     assert "feedback" not in js.lower()
 

@@ -358,6 +358,11 @@
   opacity: 1;
 }
 
+/* 演出が止まっている状態(=Hostの操作待ち)では、通常より見つけやすくする */
+.p-root[data-busy="false"] .p-controls {
+  opacity: .45;
+}
+
 .p-root .p-controls button {
   font-size: calc(var(--u) * 1.1);
   padding: calc(var(--u) * .7) calc(var(--u) * 1.2);
@@ -409,17 +414,48 @@
 .ranking-row .score { color: var(--p-sub); font-variant-numeric: tabular-nums; }
 
 /* ---------------------------------------------------------------------------
-   9. 旧 reveal engine の互換スタイル (Phase 9B で engine ごと撤去する)
+   9. 停止点のプロンプト
+   1クリック = 1つの意味のある演出sequence。sequenceが終わるたびにここで停まる。
+   ステージを隠さないよう、下部中央のバーとして重ねて出す。
    --------------------------------------------------------------------------- */
-.judge-score-bubble {
-  padding: 8px 14px;
-  border-radius: 10px;
-  background: var(--p-panel-deep);
-  border: 1px solid var(--p-line);
-  text-align: center;
+.p-root .panel.p-prompt {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--u) * 1.4);
+  transform: translateX(-50%);
+  z-index: 15;
+  width: auto;
+  max-width: min(92vw, calc(var(--u) * 70));
+  margin: 0;
+  padding: calc(var(--u) * 1.3) calc(var(--u) * 2.4);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 1.6);
+  background: rgba(18, 16, 13, .93);
+  border-color: var(--p-line);
+  box-shadow: 0 calc(var(--u) * 1.2) calc(var(--u) * 3) rgba(0, 0, 0, .65);
 }
-.judge-score-bubble .name { display: block; font-size: .7rem; color: var(--p-sub); }
-.judge-score-bubble .score { font-size: 1.2rem; font-weight: 700; }
+
+.p-root .panel.p-prompt h2 {
+  margin: 0;
+  font-size: calc(var(--u) * 1.7);
+  white-space: nowrap;
+}
+
+.p-root .panel.p-prompt p {
+  margin: 0;
+  font-size: calc(var(--u) * 1.3);
+  white-space: nowrap;
+}
+
+.p-root .panel.p-prompt button {
+  flex: none;
+}
+
+/* 演出中はプロンプトを出さないので、ステージだけが見えている状態になる */
+.p-root[data-busy="true"] .p-prompt {
+  display: none !important;
+}
 
 /* ---------------------------------------------------------------------------
    10. reduced motion
