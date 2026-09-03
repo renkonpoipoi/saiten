@@ -485,3 +485,83 @@
   .p-subject { padding: 0 calc(var(--u) * 2); }
   .p-rail { width: 96%; }
 }
+
+/* ---------------------------------------------------------------------------
+   12. ランキング (Phase 9C)
+   SEQUENTIALの暫定ランキングと、最終ランキングで同じ行部品を共有する。
+   順位はサーバーが確定済みで、ここは見せ方だけを扱う。
+   --------------------------------------------------------------------------- */
+.p-ranking__grid,
+#rankingList {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * .8);
+  max-width: calc(var(--u) * 76);
+  margin: 0 auto;
+}
+
+.p-rank-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 1.8);
+  padding: calc(var(--u) * 1.1) calc(var(--u) * 2);
+  border-radius: calc(var(--u) * .8);
+  border: 1px solid rgba(214, 179, 90, .16);
+  background: linear-gradient(180deg, var(--p-panel) 0%, var(--p-panel-deep) 100%);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .08);
+  /* 挿入時の登場。FLIPのtranslateYはJSがinline styleで上書きする。 */
+  animation: rankRowIn var(--t-rank-insert) cubic-bezier(.22, .61, .36, 1) both;
+}
+
+@keyframes rankRowIn {
+  from { opacity: 0; transform: translateY(calc(var(--u) * 2.5)); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.p-rank-row__rank {
+  font-family: var(--p-serif);
+  font-size: calc(var(--u) * 2.2);
+  font-weight: 900;
+  color: var(--p-gold);
+  min-width: calc(var(--u) * 8);
+  white-space: nowrap;
+}
+
+.p-rank-row__name {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(var(--u) * 2);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.p-rank-row__score {
+  font-size: calc(var(--u) * 2.6);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--p-ivory);
+}
+
+/* 今回入ってきた1件だけを一時的に強調する。既存行は通常のmotionのまま。 */
+.p-rank-row[data-highlight="true"] {
+  border-color: var(--p-gold);
+  background:
+    radial-gradient(ellipse 100% 160% at 0% 50%, rgba(125, 17, 27, .35) 0%, rgba(125, 17, 27, 0) 60%),
+    linear-gradient(180deg, var(--p-panel) 0%, var(--p-panel-deep) 100%);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .3), var(--p-glow);
+}
+
+/* 1位は最終確定後にだけ強調する(暫定表示中は光らせない) */
+.p-ranking[data-winner="true"] .p-rank-row[data-top="true"] {
+  border-color: var(--p-gold);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .3), var(--p-glow-strong);
+}
+
+.p-ranking[data-winner="true"] .p-rank-row[data-top="true"] .p-rank-row__score {
+  color: var(--p-gold-hi);
+}
+
+.p-ranking[data-final="true"] .p-ranking__title {
+  color: var(--p-gold-hi);
+  text-shadow: var(--p-glow);
+}

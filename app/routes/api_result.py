@@ -70,6 +70,26 @@ def get_subject_result(project_id: int, subject_id: int):
     return jsonify(result_service.build_subject_result(project, subject))
 
 
+@api_result_bp.get("/projects/<int:project_id>/interim-ranking")
+@require_host
+def get_interim_ranking(project_id: int):
+    """SEQUENTIAL: 発表中/発表済みのSubjectだけで作る暫定ランキング。
+
+    SEQUENTIALはSubjectを1件ずつ発表し終えるまでProject.statusがSCORINGのまま
+    なのでresult-summaryは使えない。一方で暫定順位の表示には、いま発表中の
+    Subject(=LOCKED)と発表済みSubject(=PRESENTED)の合計点が必要になる。
+
+    開示範囲はsubject単位のエンドポイントと同じゲート
+    (result_service.REVEALABLE_SUBJECT_STATUSES)に揃えてあり、
+    WAITING / SCORING のSubjectの点数は一切含まない。
+    順位はサーバー側のcompetition rankingが唯一の正解。
+    """
+    project = db.session.get(Project, project_id)
+    if project is None:
+        raise NotFoundError("Project not found.")
+    return jsonify(result_service.build_interim_ranking(project))
+
+
 @api_result_bp.get("/projects/<int:project_id>/analysis")
 @require_host
 def get_analysis(project_id: int):

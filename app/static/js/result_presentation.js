@@ -25,6 +25,8 @@
     activeScore: document.getElementById("activeJudgeScore"),
     total: document.getElementById("revealTotal"),
     totalValue: document.getElementById("revealTotalValue"),
+    rankingList: document.getElementById("rankingList"),
+    rankingTitle: document.getElementById("rankingTitle"),
   };
 
   // 取得済みの集計結果。FINISHED後のreplay/ランキング再表示は全てこの値の
@@ -207,30 +209,9 @@
     rankingPanel.classList.remove("hidden");
     rankingPanel.dataset.preserved = "false";
 
-    const list = document.getElementById("rankingList");
-    list.innerHTML = "";
-    const sorted = [...summary.subjects].sort(
-      (a, b) => a.rank - b.rank || a.sort_order - b.sort_order
-    );
-    sorted.forEach((subject) => {
-      const row = document.createElement("div");
-      row.className = `ranking-row${subject.rank === 1 ? " rank-1" : ""}`;
-
-      const rank = document.createElement("div");
-      rank.className = "rank";
-      rank.textContent = `${subject.rank}位`;
-
-      const name = document.createElement("div");
-      name.className = "name";
-      name.textContent = subject.name;
-
-      const score = document.createElement("div");
-      score.className = "score";
-      score.textContent = `${subject.total_score}点 (平均 ${subject.mean_score})`;
-
-      row.append(rank, name, score);
-      list.appendChild(row);
-    });
+    rankingPanel.dataset.winner = "true";
+    stage.setRankingTitle(stageRefs, FINAL_RANKING_TITLE);
+    renderRankingList(stage.sortedByRank(summary.subjects), null);
 
     renderRankingActions(summary);
   }
@@ -444,6 +425,7 @@
   let pollInFlight = false;
   let pollingStopped = false;
   let pendingSubjectId = null;
+  let pendingIsLastSubject = false;
 
   function hideSequentialPanels() {
     [sequentialWaitingPanel, sequentialStandbyPanel, confirmNextPanel, finalRankingPanel]
@@ -508,6 +490,11 @@
     if (state.presentable_subject_id) {
       stopPolling();
       pendingSubjectId = state.presentable_subject_id;
+      // これ以降に採点する被採点者が居なければ、これが最後の1組。
+      // 最後の1組ではランキング挿入がそのまま最終順位確定演出になる。
+      pendingIsLastSubject = !state.subjects.some(
+        (s) => s.presentation_status === "WAITING" || s.presentation_status === "SCORING"
+      );
       const subject = state.subjects.find((s) => s.id === pendingSubjectId);
       document.getElementById("sequentialSubjectName").textContent = subject.name;
       revealStage.classList.add("hidden");
@@ -553,11 +540,201 @@
     hideSequentialPanels();
     prepareAudio();
     revealStage.classList.remove("hidden");
+    // TOTALのあとは停止せず、そのまま暫定ランキングへの挿入まで自動で進む。
+    // 最終Subjectでは FINAL RANKING 化まで進み、そこで停止する。
     // BATCHとまったく同じ演出engineを再利用する
-    await revealSubjectSequence(payload.subject, () => {
-      confirmNextPanel.classList.remove("hidden");
-    });
+    const completed = await revealSubjectSequence(payload.subject, () => {});
+    if (!completed) return;
+    await runSequentialRanking(pendingIsLastSubject);
   });
+
+  // ---------------------------------------------------------------------------
+  // SEQUENTIAL: 暫定ランキングへの挿入
+  //
+  // 順位の正解はサーバーのcompetition rankingだけが持つ。ここは
+  // interim-ranking の結果を描き、今回Subjectが入っていく様子を見せるだけ。
+  // ---------------------------------------------------------------------------
+
+  const CURRENT_RANKING_TITLE = "暫定ランキング";
+  const FINAL_RANKING_TITLE = "FINAL RANKING";
+
+  let interimSubjects = [];
+  let sequentialIsLast = false;
+
+  async function loadInterimRanking() {
+    try {
+      return await apiFetch(`/api/projects/${projectId}/interim-ranking`);
+    } catch (err) {
+      if (err.status === 403) {
+        window.location.href = "/host/login";
+        return null;
+      }
+      showMessage(err.message, { isError: true });
+      return null;
+    }
+  }
+
+  function rankingIsFinal() {
+    return rankingPanel.dataset.final === "true";
+  }
+
+  /** 今回Subjectを一番下に置いた「挿入前」の並び。ここから正しい順位へ動かす。 */
+  function insertionOrder(subjects, incomingId) {
+    const others = subjects.filter((s) => s.id !== incomingId);
+    const incoming = subjects.filter((s) => s.id === incomingId);
+    return [...stage.sortedByRank(others), ...incoming];
+  }
+
+  function applyRankStep(step, subjects, incomingId) {
+    switch (step.phase) {
+      case "RANK_INSERT":
+        renderRankingList(insertionOrder(subjects, incomingId), incomingId);
+        playSfx("rankTick");
+        break;
+      case "RANK_MOVE":
+        // 並べ替え前後の位置差を測って既存行を移動させる(FLIP)。
+        // 新規行は自前の登場アニメーションに任せる。
+        stage.flipRows(
+          stageRefs.rankingList,
+          () => renderRankingList(stage.sortedByRank(subjects), incomingId),
+          core.TIMING.rankMove
+        );
+        break;
+      case "RANK_SETTLED":
+        stage.clearRowTransforms(stageRefs.rankingList);
+        clearRankingHighlight();
+        playSfx("rankSettle");
+        break;
+      case "FINAL_TITLE":
+        markRankingFinal();
+        break;
+      case "WINNER_GLOW":
+        rankingPanel.dataset.winner = "true";
+        playSfx("winner");
+        break;
+      default:
+        break;
+    }
+  }
+
+  function renderRankingList(subjects, highlightId) {
+    const groups = core.toRankGroups(subjects);
+    stageRefs.rankingList.innerHTML = "";
+    subjects.forEach((subject) => {
+      const row = stage.buildRankingRow(subject, groups);
+      if (highlightId != null && subject.id === highlightId) {
+        row.dataset.highlight = "true";
+      }
+      if (subject.rank === 1) row.dataset.top = "true";
+      stageRefs.rankingList.appendChild(row);
+    });
+  }
+
+  function clearRankingHighlight() {
+    Array.from(stageRefs.rankingList.children).forEach((row) => {
+      delete row.dataset.highlight;
+    });
+  }
+
+  function markRankingFinal() {
+    rankingPanel.dataset.final = "true";
+    stage.setRankingTitle(stageRefs, FINAL_RANKING_TITLE);
+  }
+
+  function showSequentialRankingFinalState(subjects, incomingId, isLast) {
+    renderRankingList(stage.sortedByRank(subjects), null);
+    stage.clearRowTransforms(stageRefs.rankingList);
+    if (isLast) {
+      markRankingFinal();
+      rankingPanel.dataset.winner = "true";
+    }
+  }
+
+  async function runSequentialRanking(isLast) {
+    const payload = await loadInterimRanking();
+    if (!payload) return false;
+
+    interimSubjects = payload.subjects;
+    sequentialIsLast = isLast;
+
+    revealStage.classList.add("hidden");
+    rankingPanel.classList.remove("hidden");
+    rankingPanel.dataset.preserved = "false";
+    rankingPanel.dataset.winner = "false";
+    rankingPanel.dataset.final = "false";
+    rankingActions.classList.add("hidden");
+    stage.setRankingTitle(stageRefs, CURRENT_RANKING_TITLE);
+    renderRankingList(insertionOrder(interimSubjects, pendingSubjectId), pendingSubjectId);
+
+    const incomingId = pendingSubjectId;
+    return playSequence({
+      steps: core.buildSequentialRankSteps(isLast),
+      applyStep: (step) => applyRankStep(step, interimSubjects, incomingId),
+      finalState: () => showSequentialRankingFinalState(interimSubjects, incomingId, isLast),
+      onComplete: () => {
+        if (isLast) {
+          finalRankingPanel.classList.remove("hidden");
+        } else {
+          confirmNextPanel.classList.remove("hidden");
+        }
+      },
+    });
+  }
+
+  // 最終Subjectの確定。演出は既に FINAL RANKING まで完了しており、ここは
+  // Hostが明示的に押したときだけ走る。
+  //
+  // 重要: 成功しても ranking DOM を作り直さない。完成した FINAL RANKING の
+  // 見た目をそのまま保持し、summary と導線(rankingActions)だけを更新する。
+  // server state の確定と ranking visual の再描画は別物として扱う。
+  //
+  // 途中で失敗しても完成済みの表示を消さない。現在statusを読み直してから
+  // 足りない遷移だけを実行するので、押し直しで安全に再開できる。
+  async function finalizeSequentialResult(preserveVisual) {
+    const state = await loadState();
+    if (!state) {
+      showMessage("状態を取得できませんでした。もう一度お試しください。", { isError: true });
+      return;
+    }
+
+    const pending = state.subjects.find((s) => s.presentation_status === "LOCKED");
+    try {
+      if (pending) {
+        await apiFetch(
+          `/api/projects/${projectId}/subjects/${pending.id}/present`,
+          { method: "POST" }
+        );
+      }
+      if (state.project.status === "SCORING") {
+        await apiFetch(`/api/projects/${projectId}/transition`, {
+          method: "POST",
+          body: JSON.stringify({ target_status: "LOCKED" }),
+        });
+      }
+      if (state.project.status !== "PRESENTING") {
+        await apiFetch(`/api/projects/${projectId}/transition`, {
+          method: "POST",
+          body: JSON.stringify({ target_status: "PRESENTING" }),
+        });
+      }
+    } catch (err) {
+      // 完成済みのFINAL RANKINGはそのまま残す
+      showMessage(err.message, { isError: true });
+      return;
+    }
+
+    hideSequentialPanels();
+    const summary = await loadSummary();
+    if (summary) currentSummary = summary;
+
+    if (preserveVisual) {
+      // ranking DOM には一切触れない。導線だけをPRESENTING状態へ更新する。
+      rankingPanel.dataset.preserved = "true";
+      renderRankingActions(currentSummary || { project: { status: "PRESENTING" } });
+    } else {
+      await showFinalRanking();
+    }
+  }
 
   document.getElementById("confirmNextButton").addEventListener("click", async () => {
     try {
@@ -577,21 +754,10 @@
   });
 
   document.getElementById("finalRankingButton").addEventListener("click", async () => {
-    // Subjectの発表は全て終わっているので、ここからは最終ランキングへ進むだけ。
-    // Project statusは SCORING -> LOCKED -> PRESENTING と前向きにしか動かさない。
-    try {
-      for (const target of ["LOCKED", "PRESENTING"]) {
-        await apiFetch(`/api/projects/${projectId}/transition`, {
-          method: "POST",
-          body: JSON.stringify({ target_status: target }),
-        });
-      }
-    } catch (err) {
-      showMessage(err.message, { isError: true });
-      return;
-    }
-    hideSequentialPanels();
-    await showFinalRanking();
+    // 演出は既に完了して停止している。ここではHostの明示操作として、
+    // 既存のforward-only APIで足りない遷移だけを実行する。
+    // 完成済みのFINAL RANKING表示は作り直さない(rankingIsFinal()のとき)。
+    await finalizeSequentialResult(rankingIsFinal());
   });
 
   document.addEventListener("visibilitychange", () => {

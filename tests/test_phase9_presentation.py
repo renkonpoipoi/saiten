@@ -194,15 +194,35 @@ def test_presentation_engine_modules_never_talk_to_the_server(client, db):
             assert token not in source, f"{path.name}: {token}"
 
 
+# 状態遷移を書いてよい場所。ここ以外から lifecycle を進めてはいけない。
+LIFECYCLE_CALLERS = (
+    'getElementById("startRevealButton").addEventListener',
+    'getElementById("finishButton").addEventListener',
+    "async function finalizeSequentialResult(",
+)
+
+
 def test_lifecycle_posts_only_happen_in_explicit_host_actions(client, db):
-    """状態遷移はHostのclickハンドラの中だけで起きること。"""
+    """状態遷移はHostの明示操作から始まる経路の中だけで起きること。
+
+    演出 runner からは絶対に起こさない(別テストで直接検証している)。
+    finalizeSequentialResult は「最終結果を確定する」ボタンからのみ呼ばれる。
+    """
     js = _presentation_js()
+    allowed = [_function_body(js, signature) for signature in LIFECYCLE_CALLERS]
+
     for match in re.finditer(r'target_status: (?:target|"[A-Z]+")', js):
-        prefix = js[: match.start()]
-        handler = prefix.rfind('addEventListener("click"')
-        assert handler != -1, "clickハンドラの外から状態遷移している"
-        # 直近のclickハンドラより後ろに関数定義境界が無いこと(=ハンドラ内にある)
-        assert "async function" not in js[handler:match.start()]
+        snippet = js[max(0, match.start() - 200):match.end()]
+        assert any(
+            snippet[-60:] in body or js[match.start():match.end()] in body
+            for body in allowed
+        ), f"想定外の場所から状態遷移している: {snippet[-80:]!r}"
+
+    # 確定処理を呼ぶのは確定ボタンだけ
+    callers = re.findall(r"finalizeSequentialResult\(", js)
+    assert len(callers) == 2, "定義1件 + 呼び出し1件のはず"
+    button = _function_body(js, 'getElementById("finalRankingButton").addEventListener')
+    assert "finalizeSequentialResult(" in button
 
 
 def test_skip_only_advances_the_animation(client, db):
@@ -403,3 +423,147 @@ def test_sequential_panels_are_untouched(client, app, db):
         "finalRankingButton",
     ):
         assert f'id="{element_id}"' in html, element_id
+
+
+# ---------------------------------------------------------------------------
+# Phase 9C: server state の確定 != ranking visual の再描画
+# ---------------------------------------------------------------------------
+
+
+def test_final_confirmation_never_rebuilds_the_ranking_dom(client, db):
+    """SEQ最終確定で完成済みのFINAL RANKINGを作り直さないこと。
+
+    確定成功後に触ってよいのは currentSummary / project status / rankingActions
+    だけで、ranking DOM そのものには一切触れない。
+    """
+    js = _presentation_js()
+    body = _function_body(js, "async function finalizeSequentialResult(")
+
+    for token in (
+        "showRanking(",
+        "rankingList.innerHTML",
+        "renderRankingList(",
+        "setRankingTitle(",
+        "buildRankingRow(",
+    ):
+        assert token not in body, f"確定処理がranking DOMを作り直している: {token}"
+
+    # 導線だけを更新する
+    assert "renderRankingActions(" in body
+    assert 'rankingPanel.dataset.preserved = "true"' in body
+
+
+def test_final_confirmation_is_idempotent_and_forward_only(client, db):
+    """現在statusを読み直し、足りない遷移だけを前向きに実行すること。"""
+    js = _presentation_js()
+    body = _function_body(js, "async function finalizeSequentialResult(")
+
+    # まず現在statusを読み直してから遷移を組み立てる
+    assert "await loadState()" in body
+    assert body.index("await loadState()") < body.index("/present")
+
+    # subject present -> Project LOCKED -> Project PRESENTING の順
+    present_at = body.index("/present")
+    locked_at = body.index('target_status: "LOCKED"')
+    presenting_at = body.index('target_status: "PRESENTING"')
+    assert present_at < locked_at < presenting_at
+
+    # 条件付き実行(既に済んでいる遷移は再実行しない = 押し直しで再開できる)
+    assert 'state.project.status === "SCORING"' in body
+    assert 'state.project.status !== "PRESENTING"' in body
+    assert 'presentation_status === "LOCKED"' in body
+
+    # 後ろ向きの遷移を書いていない
+    targets = set(re.findall(r'target_status: "([A-Z]+)"', body))
+    assert targets == {"LOCKED", "PRESENTING"}, targets
+
+
+def test_final_confirmation_keeps_the_visual_on_failure(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "async function finalizeSequentialResult(")
+    catch_index = body.index("} catch (err)")
+    catch_block = body[catch_index:catch_index + 300]
+    assert "showMessage" in catch_block
+    # 失敗時にランキング表示を消す処理を入れていない
+    for token in ("classList.add(\"hidden\")", "innerHTML"):
+        assert token not in catch_block, token
+
+
+def test_sequential_reveal_continues_into_the_ranking_without_a_click(client, db):
+    """TOTALのあと、Hostのクリックを挟まずにランキング挿入まで自動で進むこと。"""
+    js = _presentation_js()
+    body = _function_body(js, 'getElementById("revealSubjectButton").addEventListener')
+    assert "await revealSubjectSequence(" in body
+    assert "await runSequentialRanking(" in body
+    assert body.index("revealSubjectSequence(") < body.index("runSequentialRanking(")
+
+
+def test_sequential_last_subject_stops_before_touching_the_server(client, db):
+    """最終Subjectは FINAL RANKING 化まで進んで停止し、そこでは遷移しないこと。"""
+    js = _presentation_js()
+    body = _function_body(js, "async function runSequentialRanking(")
+    for token in ("target_status", "/present", "transition"):
+        assert token not in body, token
+    # 停止点として確定ボタンを出すだけ
+    assert "finalRankingPanel.classList.remove(\"hidden\")" in body
+
+    steps = _function_body(js, "function applyRankStep(")
+    assert 'case "FINAL_TITLE"' in steps
+    assert 'case "WINNER_GLOW"' in steps
+
+
+def test_final_ranking_button_is_the_only_sequential_lifecycle_trigger(client, db):
+    js = _presentation_js()
+    body = _function_body(js, 'getElementById("finalRankingButton").addEventListener')
+    assert "finalizeSequentialResult(" in body
+    # ボタンのハンドラ自身は遷移を書かない(冪等な確定処理へ委譲する)
+    assert "target_status" not in body
+
+
+def test_interim_ranking_is_fetched_read_only(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "async function loadInterimRanking(")
+    assert "interim-ranking" in body
+    assert "method" not in body, "GET以外で叩いてはいけない"
+
+
+def test_ranking_uses_flip_for_existing_rows(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "function applyRankStep(")
+    assert "stage.flipRows(" in body
+
+    stage_js = (PRESENTATION_JS_DIR / "stage.js").read_text(encoding="utf-8")
+    flip = _function_body(stage_js, "function flipRows(")
+    assert "getBoundingClientRect" in flip
+    assert "requestAnimationFrame" in flip
+    # 単一列なので縦方向だけで足りる
+    assert "translateY(" in flip
+    assert "translateX(" not in flip
+
+
+def test_ranking_highlights_only_the_incoming_subject(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "function renderRankingList(")
+    assert "highlightId" in body
+    assert 'row.dataset.highlight = "true"' in body
+
+    css = _reveal_css()
+    assert '.p-rank-row[data-highlight="true"]' in css
+
+
+def test_ranking_title_switches_to_final(client, db):
+    js = _presentation_js()
+    assert '"暫定ランキング"' in js
+    assert '"FINAL RANKING"' in js
+    body = _function_body(js, "function markRankingFinal(")
+    assert 'rankingPanel.dataset.final = "true"' in body
+    assert "FINAL_RANKING_TITLE" in body
+
+
+def test_no_new_migrations_were_added_in_phase9():
+    versions = Path(__file__).resolve().parent.parent / "migrations" / "versions"
+    revisions = sorted(p.name for p in versions.glob("*.py"))
+    assert revisions == [
+        "9c4e17a2b8d3_add_presentation_modes.py",
+        "b37d61517847_initial_schema.py",
+    ], revisions

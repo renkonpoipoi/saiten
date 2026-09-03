@@ -122,8 +122,106 @@
     refs.stage.dataset.phase = "TOTAL_VISIBLE";
   }
 
+  /* -------------------------------------------------------------------------
+     ランキング
+     順位はサーバーが確定済み。ここでは描画と並べ替えの見せ方だけを扱う。
+     ------------------------------------------------------------------------- */
+
+  function rankLabel(subject, groups) {
+    var group = null;
+    (groups || []).forEach(function (candidate) {
+      if (candidate.rank === subject.rank) group = candidate;
+    });
+    return group ? core.groupLabel(group) : "第" + subject.rank + "位";
+  }
+
+  function buildRankingRow(subject, groups) {
+    var row = document.createElement("div");
+    row.className = "p-rank-row";
+    row.dataset.subjectId = String(subject.id);
+    row.dataset.rank = String(subject.rank);
+
+    var rank = document.createElement("div");
+    rank.className = "p-rank-row__rank";
+    rank.textContent = rankLabel(subject, groups);
+
+    var name = document.createElement("div");
+    name.className = "p-rank-row__name";
+    name.textContent = subject.name;
+
+    var score = document.createElement("div");
+    score.className = "p-rank-row__score";
+    score.textContent = String(subject.total_score);
+
+    row.append(rank, name, score);
+    return row;
+  }
+
+  function sortedByRank(subjects) {
+    return (subjects || []).slice().sort(function (a, b) {
+      return (a.rank - b.rank) || (a.sort_order - b.sort_order);
+    });
+  }
+
+  /** 1列のランキングを組み直す。highlightSubjectId の行だけ一時強調する。 */
+  function renderRankingColumn(refs, subjects, highlightSubjectId) {
+    var groups = core.toRankGroups(subjects);
+    refs.rankingList.innerHTML = "";
+    sortedByRank(subjects).forEach(function (subject) {
+      var row = buildRankingRow(subject, groups);
+      if (highlightSubjectId != null && subject.id === highlightSubjectId) {
+        row.dataset.highlight = "true";
+      }
+      if (subject.rank === 1) row.dataset.top = "true";
+      refs.rankingList.appendChild(row);
+    });
+  }
+
+  /** FLIP: 並べ替え前後の位置差を測って、既存行を移動しているように見せる。
+      単一列なので縦方向の translateY だけで完結する。
+      新しく入った行は自前の登場アニメーションに任せるので対象外。 */
+  function flipRows(container, mutate, duration) {
+    var before = {};
+    Array.prototype.forEach.call(container.children, function (row) {
+      before[row.dataset.subjectId] = row.getBoundingClientRect().top;
+    });
+
+    mutate();
+
+    Array.prototype.forEach.call(container.children, function (row) {
+      var previousTop = before[row.dataset.subjectId];
+      if (previousTop === undefined) return;
+      var delta = previousTop - row.getBoundingClientRect().top;
+      if (!delta) return;
+      row.style.transition = "none";
+      row.style.transform = "translateY(" + delta + "px)";
+      requestAnimationFrame(function () {
+        row.style.transition = "transform " + duration + "ms cubic-bezier(.22,.61,.36,1)";
+        row.style.transform = "";
+      });
+    });
+  }
+
+  function clearRowTransforms(container) {
+    Array.prototype.forEach.call(container.children, function (row) {
+      row.style.transition = "";
+      row.style.transform = "";
+    });
+  }
+
+  function setRankingTitle(refs, text) {
+    refs.rankingTitle.textContent = text;
+  }
+
   var api = {
     UNREVEALED: UNREVEALED,
+    buildRankingRow: buildRankingRow,
+    sortedByRank: sortedByRank,
+    renderRankingColumn: renderRankingColumn,
+    flipRows: flipRows,
+    clearRowTransforms: clearRowTransforms,
+    setRankingTitle: setRankingTitle,
+    rankLabel: rankLabel,
     buildRail: buildRail,
     prepareSubject: prepareSubject,
     resetCenter: resetCenter,

@@ -21,6 +21,12 @@ from app.services.project_service import (
 )
 
 
+# 発表データを外へ出してよいSubjectの進行状態。
+# LOCKED = いま得点発表中(まだPRESENTEDではない)、PRESENTED = 発表確定済み。
+# WAITING / SCORING のSubjectはこの集合に含めない = 点数を一切外へ出さない。
+REVEALABLE_SUBJECT_STATUSES = ("LOCKED", "PRESENTED")
+
+
 class _ScoreIndex:
     """1プロジェクト分のsubmitted評価を、集計しやすい形にまとめて保持する。
 
@@ -210,7 +216,7 @@ def build_subject_result(project: Project, subject: Subject) -> dict:
         raise ForbiddenError("Subject does not belong to this project.")
 
     status = subject_presentation_status(project, subject)
-    if status not in ("LOCKED", "PRESENTED"):
+    if status not in REVEALABLE_SUBJECT_STATUSES:
         raise ConflictError(
             f"This subject's result is not available yet (current status: {status})."
         )
@@ -227,6 +233,49 @@ def build_subject_result(project: Project, subject: Subject) -> dict:
         "theoretical_max_total": sum(c.max_score for c in criteria),
         "official_scorer_count": len(official_ids),
         "subject": _build_subject_row(project, subject, criteria, index, official_ids),
+    }
+
+
+def build_interim_ranking(project: Project) -> dict:
+    """SEQUENTIALの暫定ランキング(最後のSubjectではそのまま最終順位になる)。
+
+    含めるSubjectは presentation_status が LOCKED か PRESENTED のものだけ。
+    SEQUENTIALでは当該Subjectを
+      LOCKED -> Judge Reveal -> TOTAL -> 暫定ランキングへ挿入
+      -> Hostが「確定して次へ」 -> PRESENTED
+    の順で扱うため、ランキングへ挿入する瞬間の今回SubjectはLOCKEDである。
+    したがって「未発表を除く」ではなく「WAITING / SCORING を除く」と定義する。
+
+    順位は既存の _competition_rank をそのまま使う。順位の正解はサーバーの
+    このロジックだけが持ち、クライアント側では再計算しない。
+
+    Project.statusがSCORINGのままでも取得できる点がresult-summaryと異なるが、
+    返す範囲はsubject単位のエンドポイント(build_subject_result)と同じゲートに
+    揃えてあるため、開示範囲は広がらない。
+    """
+    subjects = _project_subjects(project)
+    criteria = _project_criteria(project)
+    official_ids = official_scorer_ids(project)
+    index = _load_score_index(project)
+
+    revealable = [
+        subject
+        for subject in subjects
+        if subject_presentation_status(project, subject) in REVEALABLE_SUBJECT_STATUSES
+    ]
+    subject_results = [
+        _build_subject_row(project, subject, criteria, index, official_ids)
+        for subject in revealable
+    ]
+
+    ranked = sorted(subject_results, key=lambda r: (-r["total_score"], r["sort_order"]))
+    _competition_rank(ranked)
+
+    return {
+        "project": _project_header(project),
+        "theoretical_max_total": sum(c.max_score for c in criteria),
+        "official_scorer_count": len(official_ids),
+        "subjects": ranked,
     }
 
 
