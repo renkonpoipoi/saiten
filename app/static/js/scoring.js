@@ -8,6 +8,8 @@
   let evaluationId = null;
   let evaluationDetail = null;
   let saveTimer = null;
+  // 逐次発表方式で、この被採点者がいま採点可能かどうか
+  let subjectStatus = "SCORING";
 
   async function init() {
     let dashboard;
@@ -27,6 +29,7 @@
       return;
     }
     evaluationId = row.evaluation_id;
+    subjectStatus = row.subject_status || "SCORING";
     await loadDetail();
   }
 
@@ -45,9 +48,20 @@
     document.title = `${evaluationDetail.subject.name} - 採点`;
 
     const isSubmitted = evaluationDetail.status === "submitted";
+    // 順番が回ってきていない被採点者は読み取り専用にする。
+    // これは表示上の配慮で、実際の拒否はサーバー側(409)が行う。
+    const isLocked = !isSubmitted && subjectStatus !== "SCORING";
+    const readOnly = isSubmitted || isLocked;
+
     const notice = document.getElementById("statusNotice");
     if (isSubmitted) {
       notice.textContent = "この採点は確定済みです。以降の変更はできません。";
+      notice.classList.remove("hidden");
+    } else if (isLocked) {
+      notice.textContent =
+        subjectStatus === "WAITING"
+          ? "この被採点者はまだ採点の順番が来ていません。発表が始まるまでお待ちください。"
+          : "この被採点者の採点は締め切られています。";
       notice.classList.remove("hidden");
     } else {
       notice.classList.add("hidden");
@@ -74,7 +88,7 @@
       input.max = String(criterion.max_score);
       input.step = "1";
       input.value = criterion.score != null ? String(criterion.score) : "0";
-      input.disabled = isSubmitted;
+      input.disabled = readOnly;
       input.dataset.criterionId = criterion.id;
 
       const output = document.createElement("output");
@@ -93,10 +107,10 @@
 
     const feedbackInput = document.getElementById("feedbackInput");
     feedbackInput.value = evaluationDetail.feedback || "";
-    feedbackInput.disabled = isSubmitted;
+    feedbackInput.disabled = readOnly;
     feedbackInput.oninput = () => queueSave();
 
-    document.getElementById("submitButton").disabled = isSubmitted;
+    document.getElementById("submitButton").disabled = readOnly;
   }
 
   function collectPayload() {

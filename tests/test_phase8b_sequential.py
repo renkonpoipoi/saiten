@@ -219,6 +219,24 @@ def test_presented_subject_cannot_be_edited_again(client, app, db):
     assert resp.status_code == 409
 
 
+def test_scorer_ui_shows_waiting_state_read_only():
+    """待機中の被採点者は入力不可で表示する(拒否の実体はサーバー側)。"""
+    from pathlib import Path
+
+    js_dir = Path(__file__).resolve().parent.parent / "app" / "static" / "js"
+
+    scoring_js = (js_dir / "scoring.js").read_text(encoding="utf-8")
+    assert "subjectStatus" in scoring_js
+    assert "readOnly" in scoring_js
+    assert "まだ採点の順番が来ていません" in scoring_js
+    # disabledはUXのためだけであることをコメントで明示している
+    assert "サーバー側" in scoring_js
+
+    dashboard_js = (js_dir / "scorer_dashboard.js").read_text(encoding="utf-8")
+    assert "subject_status" in dashboard_js
+    assert "待機中" in dashboard_js
+
+
 def test_scorer_dashboard_marks_waiting_subjects(client, app, db):
     created = _sequential_project(client)
     project_id = created["project_id"]
