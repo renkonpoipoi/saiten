@@ -95,10 +95,26 @@
     renderMatrix(data);
 
     const closeSection = document.getElementById("closeSection");
+    const sequentialSection = document.getElementById("sequentialSection");
     const presentLink = document.getElementById("presentLink");
     const analysisLink = document.getElementById("analysisLink");
-    if (data.project_status === "SCORING") {
+    const isSequential = data.presentation_mode === "SEQUENTIAL";
+
+    // SEQUENTIALではBATCH用の締切UI(強制締切を含む)を一切出さない。
+    // 同じボタンを流用すると、未提出者を除外して締め切れると誤解されるため。
+    if (data.project_status === "SCORING" && isSequential) {
+      sequentialSection.classList.remove("hidden");
+      renderSequential(data);
+    } else {
+      sequentialSection.classList.add("hidden");
+    }
+
+    if (data.project_status === "SCORING" && !isSequential) {
       closeSection.classList.remove("hidden");
+      presentLink.classList.add("hidden");
+      analysisLink.classList.add("hidden");
+    } else if (data.project_status === "SCORING") {
+      closeSection.classList.add("hidden");
       presentLink.classList.add("hidden");
       analysisLink.classList.add("hidden");
     } else {
@@ -120,6 +136,88 @@
       setPollingIndicator(true);
     }
   }
+
+  const SUBJECT_STATUS_LABELS = {
+    WAITING: "待機中",
+    SCORING: "採点中",
+    LOCKED: "締切済み(発表待ち)",
+    PRESENTED: "発表済み",
+  };
+
+  function renderSequential(data) {
+    document.getElementById("sequentialPresentLink").href = `/host/${projectId}/present`;
+
+    const container = document.getElementById("sequentialProgressRows");
+    container.innerHTML = "";
+    data.subjects.forEach((subject) => {
+      const row = document.createElement("div");
+      row.className = "progress-row";
+
+      const name = document.createElement("span");
+      name.textContent = subject.name;
+
+      const detail = document.createElement("span");
+      if (subject.presentation_status === "WAITING") {
+        detail.textContent = SUBJECT_STATUS_LABELS.WAITING;
+      } else {
+        detail.textContent =
+          `${SUBJECT_STATUS_LABELS[subject.presentation_status]} ・ ` +
+          `提出 ${subject.submitted_count}/${subject.scorer_count}` +
+          (subject.pending_count > 0 ? `(未提出 ${subject.pending_count}名)` : "");
+      }
+
+      row.append(name, detail);
+      container.appendChild(row);
+    });
+
+    const current = data.subjects.find((s) => s.id === data.current_subject_id);
+    const presentable = data.subjects.find((s) => s.id === data.presentable_subject_id);
+    const status = document.getElementById("sequentialCurrentStatus");
+    const lockButton = document.getElementById("lockSubjectButton");
+
+    if (presentable) {
+      status.textContent = `「${presentable.name}」は締切済みです。結果発表画面から得点を発表してください。`;
+      lockButton.disabled = true;
+      lockButton.dataset.subjectId = "";
+    } else if (current) {
+      status.textContent = current.can_lock
+        ? `「${current.name}」は採点者全員が提出済みです。締め切れます。`
+        : `「${current.name}」を採点中です(未提出 ${current.pending_count}名)。全員の提出を待っています。`;
+      lockButton.disabled = !current.can_lock;
+      lockButton.dataset.subjectId = String(current.id);
+    } else if (data.all_subjects_presented) {
+      status.textContent = "全ての被採点者の発表が終わりました。結果発表画面から最終ランキングへ進めます。";
+      lockButton.disabled = true;
+      lockButton.dataset.subjectId = "";
+    }
+  }
+
+  document.getElementById("lockSubjectButton").addEventListener("click", async () => {
+    const button = document.getElementById("lockSubjectButton");
+    const subjectId = button.dataset.subjectId;
+    if (!subjectId) return;
+
+    const fresh = await fetchProgress({ silent: true });
+    const data = fresh || lastProgress;
+    const subject = data
+      ? data.subjects.find((s) => String(s.id) === subjectId)
+      : null;
+    if (!subject || !subject.can_lock) {
+      showMessage("まだ全員の提出が揃っていません。", { isError: true });
+      return;
+    }
+    if (!confirm(`「${subject.name}」の採点を締め切りますか?締切後は変更できません。`)) return;
+
+    try {
+      await apiFetch(`/api/projects/${projectId}/subjects/${subjectId}/lock`, {
+        method: "POST",
+      });
+      showMessage("締め切りました。結果発表画面から得点を発表してください。");
+      await fetchProgress();
+    } catch (err) {
+      showMessage(err.message, { isError: true });
+    }
+  });
 
   function setPollingIndicator(active) {
     const el = document.getElementById("pollingIndicator");

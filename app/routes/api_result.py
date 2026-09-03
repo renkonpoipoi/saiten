@@ -12,8 +12,8 @@ from flask import Blueprint, Response, jsonify
 from app.auth.decorators import require_host
 from app.errors import ConflictError, NotFoundError
 from app.extensions import db
-from app.models import Project
-from app.services import export_service, result_service
+from app.models import Project, Subject
+from app.services import export_service, project_service, result_service
 
 api_result_bp = Blueprint("api_result", __name__, url_prefix="/api")
 
@@ -42,6 +42,32 @@ def _get_project_for_results(project_id: int) -> Project:
 def get_result_summary(project_id: int):
     project = _get_project_for_results(project_id)
     return jsonify(result_service.build_result_summary(project))
+
+
+@api_result_bp.get("/projects/<int:project_id>/presentation-state")
+@require_host
+def get_presentation_state(project_id: int):
+    """結果発表画面が次に何を出すべきかを決めるための状態。
+
+    採点中でも取得できるが、返すのは進行状態と提出人数だけで、点数は含まない。
+    """
+    project = db.session.get(Project, project_id)
+    if project is None:
+        raise NotFoundError("Project not found.")
+    return jsonify(project_service.build_presentation_state(project))
+
+
+@api_result_bp.get("/projects/<int:project_id>/subjects/<int:subject_id>/result")
+@require_host
+def get_subject_result(project_id: int, subject_id: int):
+    """SEQUENTIAL: 締切済みの1 Subjectだけの発表データ。"""
+    project = db.session.get(Project, project_id)
+    if project is None:
+        raise NotFoundError("Project not found.")
+    subject = db.session.get(Subject, subject_id)
+    if subject is None:
+        raise NotFoundError("Subject not found.")
+    return jsonify(result_service.build_subject_result(project, subject))
 
 
 @api_result_bp.get("/projects/<int:project_id>/analysis")

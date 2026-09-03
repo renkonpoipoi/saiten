@@ -14,6 +14,33 @@
   <button type="button" id="startRevealButton" class="primary">結果発表を開始する</button>
 </section>
 
+{# --- SEQUENTIAL専用のパネル群。BATCHでは一度も表示しない --- #}
+<section id="sequentialWaitingPanel" class="panel hidden">
+  <h1>採点中です</h1>
+  <p id="sequentialWaitingText" style="color:var(--muted)"></p>
+  <p style="color:var(--muted); font-size:.85rem;">
+    採点者全員の提出が揃うと、Host Dashboardからこの被採点者を締め切れます。
+  </p>
+</section>
+
+<section id="sequentialStandbyPanel" class="panel hidden">
+  <h1><span id="sequentialSubjectName">-</span> の得点発表</h1>
+  <p style="color:var(--muted)">採点者ごとの得点を1人ずつ開示します。</p>
+  <button type="button" id="revealSubjectButton" class="primary">この被採点者の得点を発表する</button>
+</section>
+
+<section id="confirmNextPanel" class="panel hidden">
+  <h2>この結果を確定しますか?</h2>
+  <p style="color:var(--muted)">確定すると発表済みになり、次の被採点者の採点が始まります。</p>
+  <button type="button" id="confirmNextButton" class="primary">確定して次へ</button>
+</section>
+
+<section id="finalRankingPanel" class="panel hidden">
+  <h1>全員の発表が終わりました</h1>
+  <p style="color:var(--muted)">最終ランキングへ進みます。</p>
+  <button type="button" id="finalRankingButton" class="primary">最終ランキングへ</button>
+</section>
+
 <section id="revealStage" class="reveal-stage hidden">
   <div class="reveal-board">
     <div class="reveal-eyebrow">REVEALING</div>

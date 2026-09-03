@@ -39,6 +39,21 @@
   </div>
 </section>
 
+{# SEQUENTIAL専用。BATCHの「強制締切」とは意味が違うため、UIも分ける #}
+<section class="panel hidden" id="sequentialSection">
+  <h2>発表者ごとの進行(M-1方式)</h2>
+  <p style="color:var(--muted)">
+    採点者全員が提出すると、この被採点者を締め切れます。逐次発表方式では
+    <strong>全採点者の提出が必要</strong>で、採点者が参加できなくなると進行できません。
+  </p>
+  <div id="sequentialProgressRows" class="progress-grid"></div>
+  <p id="sequentialCurrentStatus" style="margin-top:12px;"></p>
+  <button type="button" id="lockSubjectButton" class="primary" disabled>
+    この被採点者を締め切る
+  </button>
+  <a class="button" id="sequentialPresentLink" href="#" style="margin-left:12px;">結果発表画面へ</a>
+</section>
+
 <section class="panel" id="closeSection">
   <h2>採点の締切</h2>
   <p style="color:var(--muted)">全員完了していれば通常の締切、未完了者がいる場合は該当者を除外して締切ます(強制締切)。</p>

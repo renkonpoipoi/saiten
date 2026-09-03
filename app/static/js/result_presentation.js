@@ -196,12 +196,176 @@
     }
   });
 
-  async function init() {
+  // -------------------------------------------------------------------------
+  // SEQUENTIAL: Subject単位の発表
+  // -------------------------------------------------------------------------
+
+  const SEQUENTIAL_POLL_INTERVAL_MS = 15000;
+
+  const sequentialWaitingPanel = document.getElementById("sequentialWaitingPanel");
+  const sequentialStandbyPanel = document.getElementById("sequentialStandbyPanel");
+  const confirmNextPanel = document.getElementById("confirmNextPanel");
+  const finalRankingPanel = document.getElementById("finalRankingPanel");
+
+  let pollTimer = null;
+  let pollInFlight = false;
+  let pollingStopped = false;
+  let pendingSubjectId = null;
+
+  function hideSequentialPanels() {
+    [sequentialWaitingPanel, sequentialStandbyPanel, confirmNextPanel, finalRankingPanel]
+      .forEach((panel) => panel.classList.add("hidden"));
+  }
+
+  function stopPolling() {
+    pollingStopped = true;
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+
+  function scheduleNextPoll() {
+    clearTimeout(pollTimer);
+    if (pollingStopped) return;
+    pollTimer = setTimeout(pollState, SEQUENTIAL_POLL_INTERVAL_MS);
+  }
+
+  async function loadState() {
+    try {
+      return await apiFetch(`/api/projects/${projectId}/presentation-state`);
+    } catch (err) {
+      if (err.status === 403) {
+        stopPolling();
+        window.location.href = "/host/login";
+        return null;
+      }
+      return null;
+    }
+  }
+
+  async function pollState() {
+    // タブが非表示の間は通信しない。重複requestも避ける。
+    if (document.hidden || pollInFlight || pollingStopped) {
+      scheduleNextPoll();
+      return;
+    }
+    pollInFlight = true;
+    try {
+      const state = await loadState();
+      if (state) await renderSequential(state);
+    } finally {
+      pollInFlight = false;
+    }
+    scheduleNextPoll();
+  }
+
+  async function renderSequential(state) {
+    hideSequentialPanels();
+    standbyPanel.classList.add("hidden");
+
+    if (state.project.status !== "SCORING") {
+      // 全Subjectの発表が終わり、最終ランキング段階へ入っている
+      stopPolling();
+      await showFinalRanking();
+      return;
+    }
+
+    if (state.presentable_subject_id) {
+      stopPolling();
+      pendingSubjectId = state.presentable_subject_id;
+      const subject = state.subjects.find((s) => s.id === pendingSubjectId);
+      document.getElementById("sequentialSubjectName").textContent = subject.name;
+      sequentialStandbyPanel.classList.remove("hidden");
+      return;
+    }
+
+    if (state.all_subjects_presented) {
+      stopPolling();
+      finalRankingPanel.classList.remove("hidden");
+      return;
+    }
+
+    const current = state.subjects.find((s) => s.id === state.current_subject_id);
+    document.getElementById("sequentialWaitingText").textContent = current
+      ? `${current.name}: ${current.submitted_count} / ${current.scorer_count} 名が提出済み`
+      : "採点の開始を待っています。";
+    sequentialWaitingPanel.classList.remove("hidden");
+    pollingStopped = false;
+    scheduleNextPoll();
+  }
+
+  async function showFinalRanking() {
     currentSummary = await loadSummary();
     if (!currentSummary) return;
+    showRanking(currentSummary);
+    if (currentSummary.project.status === "FINISHED") {
+      setFinishedPanelVisible(true);
+    }
+  }
 
-    document.getElementById("backToDashboardLink").href = `/host/${projectId}`;
-    document.getElementById("finishedAnalysisLink").href = `/host/${projectId}/analysis`;
+  document.getElementById("revealSubjectButton").addEventListener("click", async () => {
+    let payload;
+    try {
+      payload = await apiFetch(
+        `/api/projects/${projectId}/subjects/${pendingSubjectId}/result`
+      );
+    } catch (err) {
+      showMessage(err.message, { isError: true });
+      return;
+    }
+    hideSequentialPanels();
+    prepareAudio();
+    playSting();
+    // BATCHとまったく同じ演出関数を再利用する
+    await revealSubject(payload.subject, payload.theoretical_max_total);
+    confirmNextPanel.classList.remove("hidden");
+  });
+
+  document.getElementById("confirmNextButton").addEventListener("click", async () => {
+    try {
+      await apiFetch(
+        `/api/projects/${projectId}/subjects/${pendingSubjectId}/present`,
+        { method: "POST" }
+      );
+    } catch (err) {
+      showMessage(err.message, { isError: true });
+      return;
+    }
+    revealStage.classList.add("hidden");
+    pendingSubjectId = null;
+    pollingStopped = false;
+    const state = await loadState();
+    if (state) await renderSequential(state);
+  });
+
+  document.getElementById("finalRankingButton").addEventListener("click", async () => {
+    // Subjectの発表は全て終わっているので、ここからは最終ランキングへ進むだけ。
+    // Project statusは SCORING -> LOCKED -> PRESENTING と前向きにしか動かさない。
+    try {
+      for (const target of ["LOCKED", "PRESENTING"]) {
+        await apiFetch(`/api/projects/${projectId}/transition`, {
+          method: "POST",
+          body: JSON.stringify({ target_status: target }),
+        });
+      }
+    } catch (err) {
+      showMessage(err.message, { isError: true });
+      return;
+    }
+    hideSequentialPanels();
+    await showFinalRanking();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !pollingStopped) {
+      pollState();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+
+  async function initBatch() {
+    currentSummary = await loadSummary();
+    if (!currentSummary) return;
 
     if (currentSummary.project.status === "LOCKED") {
       standbyPanel.classList.remove("hidden");
@@ -213,6 +377,20 @@
       // ここからFINISHEDを巻き戻す操作は一切行わない。
       showRanking(currentSummary);
       setFinishedPanelVisible(true);
+    }
+  }
+
+  async function init() {
+    document.getElementById("backToDashboardLink").href = `/host/${projectId}`;
+    document.getElementById("finishedAnalysisLink").href = `/host/${projectId}/analysis`;
+
+    const state = await loadState();
+    if (!state) return;
+
+    if (state.project.presentation_mode === "SEQUENTIAL") {
+      await renderSequential(state);
+    } else {
+      await initBatch();
     }
   }
 

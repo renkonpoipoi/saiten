@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from app.errors import ConflictError, ForbiddenError
 from app.models import Criterion, Evaluation, EvaluationScore, Project, Scorer, Subject
 from app.services.project_service import (
     official_scorer_ids,
@@ -194,6 +195,38 @@ def build_result_summary(project: Project) -> dict:
         "eligible_scorer_count": len(official_ids),
         "official_scorer_count": len(official_ids),
         "subjects": ranked,
+    }
+
+
+def build_subject_result(project: Project, subject: Subject) -> dict:
+    """SEQUENTIALで1 Subjectだけを発表するためのデータ。
+
+    締切済み(LOCKED)か発表済み(PRESENTED)のSubjectしか返さない。採点中の
+    Subjectの点数がHostに見えてしまうと、発表前に結果が漏れるため。
+    judge_totalsの形はbuild_result_summaryと同一なので、発表演出は
+    BATCHとまったく同じ関数を再利用できる。
+    """
+    if subject.project_id != project.id:
+        raise ForbiddenError("Subject does not belong to this project.")
+
+    status = subject_presentation_status(project, subject)
+    if status not in ("LOCKED", "PRESENTED"):
+        raise ConflictError(
+            f"This subject's result is not available yet (current status: {status})."
+        )
+
+    criteria = _project_criteria(project)
+    official_ids = official_scorer_ids(project)
+    index = _load_score_index(project)
+
+    return {
+        "project": _project_header(project),
+        "criteria": [
+            {"id": c.id, "name": c.name, "max_score": c.max_score} for c in criteria
+        ],
+        "theoretical_max_total": sum(c.max_score for c in criteria),
+        "official_scorer_count": len(official_ids),
+        "subject": _build_subject_row(project, subject, criteria, index, official_ids),
     }
 
 

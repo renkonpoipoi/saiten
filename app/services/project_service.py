@@ -564,6 +564,82 @@ def transition(project: Project, target_status: str) -> Project:
 # ---------------------------------------------------------------------------
 
 
+def subject_progress_rows(project: Project) -> list[dict]:
+    """Subjectごとの進行状態と提出状況。Host DashboardとPresentationで共用する。"""
+    subjects = (
+        Subject.query.filter_by(project_id=project.id).order_by(Subject.sort_order).all()
+    )
+    participating_ids = participating_scorer_ids(project.id)
+
+    submitted_by_subject: dict[int, int] = defaultdict(int)
+    rows = (
+        db.session.query(Evaluation.scorer_id, Evaluation.subject_id)
+        .filter(
+            Evaluation.project_id == project.id,
+            Evaluation.status == "submitted",
+        )
+        .all()
+    )
+    for scorer_id, subject_id in rows:
+        if scorer_id in participating_ids:
+            submitted_by_subject[subject_id] += 1
+
+    result = []
+    for subject in subjects:
+        status = subject_presentation_status(project, subject)
+        submitted = submitted_by_subject.get(subject.id, 0)
+        result.append(
+            {
+                "id": subject.id,
+                "name": subject.name,
+                "sort_order": subject.sort_order,
+                "presentation_status": status,
+                "submitted_count": submitted,
+                "scorer_count": len(participating_ids),
+                "pending_count": len(participating_ids) - submitted,
+                # SEQUENTIALでこのSubjectを今すぐ締め切れるか(全員提出済みか)
+                "can_lock": (
+                    project.presentation_mode == "SEQUENTIAL"
+                    and status == "SCORING"
+                    and len(participating_ids) > 0
+                    and submitted == len(participating_ids)
+                ),
+            }
+        )
+    return result
+
+
+def _progression_summary(project: Project, subject_rows: list[dict]) -> dict:
+    return {
+        # SEQUENTIALで現在採点中のSubject(いなければNone)
+        "current_subject_id": next(
+            (r["id"] for r in subject_rows if r["presentation_status"] == "SCORING"), None
+        ),
+        # SEQUENTIALで発表待ち(締切済み)のSubject
+        "presentable_subject_id": next(
+            (r["id"] for r in subject_rows if r["presentation_status"] == "LOCKED"), None
+        ),
+        "all_subjects_presented": bool(subject_rows)
+        and all(r["presentation_status"] == "PRESENTED" for r in subject_rows),
+    }
+
+
+def build_presentation_state(project: Project) -> dict:
+    """結果発表画面が「いま何をすべきか」を判断するための状態。"""
+    subject_rows = subject_progress_rows(project)
+    return {
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "status": project.status,
+            "presentation_mode": project.presentation_mode,
+        },
+        "subjects": subject_rows,
+        "participating_scorer_count": len(participating_scorer_ids(project.id)),
+        **_progression_summary(project, subject_rows),
+    }
+
+
 def get_progress(project: Project) -> dict:
     subjects = Subject.query.filter_by(project_id=project.id).order_by(Subject.sort_order).all()
     scorers = Scorer.query.filter_by(project_id=project.id, is_active=True).order_by(Scorer.id).all()
@@ -592,33 +668,7 @@ def get_progress(project: Project) -> dict:
 
     submitted_count = sum(1 for e in evaluations if e.status == "submitted")
 
-    participating_ids = participating_scorer_ids(project.id)
-    submitted_by_subject: dict[int, int] = defaultdict(int)
-    for evaluation in evaluations:
-        if evaluation.status == "submitted" and evaluation.scorer_id in participating_ids:
-            submitted_by_subject[evaluation.subject_id] += 1
-
-    subject_rows = []
-    for subject in subjects:
-        status = subject_presentation_status(project, subject)
-        subject_submitted = submitted_by_subject.get(subject.id, 0)
-        subject_rows.append(
-            {
-                "id": subject.id,
-                "name": subject.name,
-                "presentation_status": status,
-                "submitted_count": subject_submitted,
-                "scorer_count": len(participating_ids),
-                "pending_count": len(participating_ids) - subject_submitted,
-                # SEQUENTIALでこのSubjectを今すぐ締め切れるか
-                "can_lock": (
-                    project.presentation_mode == "SEQUENTIAL"
-                    and status == "SCORING"
-                    and len(participating_ids) > 0
-                    and subject_submitted == len(participating_ids)
-                ),
-            }
-        )
+    subject_rows = subject_progress_rows(project)
 
     return {
         "project_status": project.status,
@@ -629,15 +679,6 @@ def get_progress(project: Project) -> dict:
         "total_count": len(evaluations),
         "eligible_scorer_count": len(eligible_ids),
         "incomplete_scorer_count": len(scorers) - len(eligible_ids),
-        "participating_scorer_count": len(participating_ids),
-        # SEQUENTIALで現在採点中のSubject(いなければNone)
-        "current_subject_id": next(
-            (r["id"] for r in subject_rows if r["presentation_status"] == "SCORING"), None
-        ),
-        # SEQUENTIALで発表待ち(締切済み)のSubject
-        "presentable_subject_id": next(
-            (r["id"] for r in subject_rows if r["presentation_status"] == "LOCKED"), None
-        ),
-        "all_subjects_presented": bool(subject_rows)
-        and all(r["presentation_status"] == "PRESENTED" for r in subject_rows),
+        "participating_scorer_count": len(participating_scorer_ids(project.id)),
+        **_progression_summary(project, subject_rows),
     }
