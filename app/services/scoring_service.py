@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from app.errors import ConflictError, ValidationError
 from app.extensions import db
 from app.models import Criterion, Evaluation, EvaluationScore, Project, Subject
+from app.services import project_service
 
 EVALUATION_STATUS_NOT_STARTED = "not_started"
 
@@ -28,6 +29,17 @@ def _require_scoring_open(evaluation: Evaluation) -> None:
     if project is None or project.status != "SCORING":
         raise ScoringClosedError("Scoring is not open for this project.")
 
+    if project.presentation_mode == "SEQUENTIAL":
+        # SEQUENTIALでは、いま発表順が回ってきているSubjectしか採点できない。
+        # WAITING(先行採点)・LOCKED(締切後)・PRESENTED(発表済みの再編集)は全て拒否する。
+        # UI側のdisabledはあくまでUXのためで、拒否の実体はここ。
+        subject = db.session.get(Subject, evaluation.subject_id)
+        if subject is None or subject.presentation_status != "SCORING":
+            current = subject.presentation_status if subject else "unknown"
+            raise ScoringClosedError(
+                f"This subject is not open for scoring (current status: {current})."
+            )
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -41,6 +53,10 @@ def get_scorer_dashboard(scorer_id: int) -> dict:
         .order_by(Subject.sort_order)
         .all()
     )
+    project = (
+        db.session.get(Project, evaluations[0].project_id) if evaluations else None
+    )
+
     rows = []
     for evaluation in evaluations:
         score_count = EvaluationScore.query.filter_by(evaluation_id=evaluation.id).count()
@@ -50,12 +66,20 @@ def get_scorer_dashboard(scorer_id: int) -> dict:
             state = "in_progress"
         else:
             state = EVALUATION_STATUS_NOT_STARTED
+
+        # SEQUENTIALでは順番が回ってきたSubjectだけが採点可能。
+        # 画面はこのフラグで「待機中」を表示するが、拒否の実体はサーバー側にある。
+        subject_status = project_service.subject_presentation_status(
+            project, evaluation.subject
+        )
         rows.append(
             {
                 "evaluation_id": evaluation.id,
                 "subject_id": evaluation.subject_id,
                 "subject_name": evaluation.subject.name,
                 "state": state,
+                "subject_status": subject_status,
+                "scorable": subject_status == "SCORING" and state != "submitted",
             }
         )
     submitted_count = sum(1 for r in rows if r["state"] == "submitted")

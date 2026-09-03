@@ -82,6 +82,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .finished-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
 .finished-actions a.button { text-decoration: none; }
 
+.mode-option { display: block; margin-bottom: 10px; }
+.mode-note { display: block; margin: 4px 0 0 24px; color: var(--muted); font-size: .85rem; }
+
 .criterion-breakdown {
   display: grid;
   gap: 20px;

@@ -29,6 +29,24 @@
     </div>
 
     <div class="field">
+      <label>結果発表の方式</label>
+      <label class="mode-option">
+        <input type="radio" name="presentationMode" value="BATCH" checked>
+        全発表者終了後にまとめて発表
+        <span class="mode-note">全員の採点が終わってから、まとめて結果を発表します。</span>
+      </label>
+      <label class="mode-option">
+        <input type="radio" name="presentationMode" value="SEQUENTIAL">
+        発表者ごとに採点・発表(M-1方式)
+        <span class="mode-note">
+          1組ずつ「発表 → 採点 → 得点発表」を繰り返します。
+          <strong>各被採点者について採点者全員の提出が必要です。</strong>
+          採点者が参加できなくなると進行できなくなるため、当日確実に参加できる人だけを登録してください。
+        </span>
+      </label>
+    </div>
+
+    <div class="field">
       <label><input type="checkbox" id="allowHostScoring"> ホスト自身も採点者に含める</label>
     </div>
 

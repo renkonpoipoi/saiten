@@ -82,6 +82,7 @@ def create_project():
         scorer_names=data.get("scorers") or [],
         criterion_names=data.get("criteria") or [],
         allow_host_scoring=bool(data.get("allow_host_scoring")),
+        presentation_mode=data.get("presentation_mode") or "BATCH",
     )
     project = result["project"]
 
@@ -97,6 +98,7 @@ def create_project():
             {
                 "project_id": project.id,
                 "project_name": project.name,
+                "presentation_mode": project.presentation_mode,
                 "host_code": result["host_code"],
                 "scorers": result["scorers"],
             }
@@ -205,6 +207,44 @@ def update_criterion(project_id: int, criterion_id: int):
     data = request.get_json(silent=True) or {}
     project_service.update_criterion(project, criterion, data.get("name", ""))
     return jsonify({"id": criterion.id, "name": criterion.name, "max_score": criterion.max_score})
+
+
+def _serialize_subject_state(subject: Subject) -> dict:
+    return {
+        "id": subject.id,
+        "name": subject.name,
+        "sort_order": subject.sort_order,
+        "presentation_status": subject.presentation_status,
+        "locked_at": subject.locked_at.isoformat() if subject.locked_at else None,
+        "presented_at": subject.presented_at.isoformat() if subject.presented_at else None,
+    }
+
+
+@api_projects_bp.post("/projects/<int:project_id>/subjects/<int:subject_id>/lock")
+@require_host
+def lock_subject(project_id: int, subject_id: int):
+    """SEQUENTIAL: 1 Subjectの採点を締め切る。参加Scorer全員の提出が前提。"""
+    project = _get_project_or_404(project_id)
+    subject = _get_subject_or_404(subject_id)
+    project_service.lock_subject(project, subject)
+    return jsonify(_serialize_subject_state(subject))
+
+
+@api_projects_bp.post("/projects/<int:project_id>/subjects/<int:subject_id>/present")
+@require_host
+def present_subject(project_id: int, subject_id: int):
+    """SEQUENTIAL: 発表済みとして確定し、次のSubjectを採点可能にする。"""
+    project = _get_project_or_404(project_id)
+    subject = _get_subject_or_404(subject_id)
+    _, next_subject = project_service.present_subject(project, subject)
+    return jsonify(
+        {
+            "subject": _serialize_subject_state(subject),
+            "next_subject": (
+                _serialize_subject_state(next_subject) if next_subject else None
+            ),
+        }
+    )
 
 
 @api_projects_bp.post("/projects/<int:project_id>/transition")

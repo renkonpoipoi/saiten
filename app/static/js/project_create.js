@@ -57,6 +57,9 @@
       scorers: collectValues(scorerList),
       criteria: collectValues(criterionList),
       allow_host_scoring: document.getElementById("allowHostScoring").checked,
+      presentation_mode: document.querySelector(
+        'input[name="presentationMode"]:checked'
+      ).value,
     };
 
     try {

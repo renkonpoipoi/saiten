@@ -6,13 +6,21 @@ route側はHTTPの入出力にのみ責務を持ち、業務ロジックはこ�
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy import func
 
 from app.errors import ConflictError, ForbiddenError, ValidationError
 from app.extensions import db
-from app.models import Criterion, Evaluation, Project, Scorer, Subject
+from app.models import (
+    PRESENTATION_MODES,
+    Criterion,
+    Evaluation,
+    Project,
+    Scorer,
+    Subject,
+)
 from app.services.code_service import generate_host_code, generate_scorer_code, hash_code
 
 REQUIRED_CRITERION_COUNT = 5
@@ -56,6 +64,7 @@ def create_project(
     scorer_names: list[str],
     criterion_names: list[str],
     allow_host_scoring: bool,
+    presentation_mode: str = "BATCH",
 ) -> dict:
     """Project/Subject/Criterion/Scorerを1トランザクションで一括作成する。
 
@@ -80,12 +89,19 @@ def create_project(
             f"Exactly {REQUIRED_CRITERION_COUNT} criteria are required in this MVP."
         )
 
+    presentation_mode = (presentation_mode or "BATCH").strip().upper()
+    if presentation_mode not in PRESENTATION_MODES:
+        raise ValidationError(
+            f"presentation_mode must be one of {PRESENTATION_MODES}."
+        )
+
     host_code = generate_host_code()
     project = Project(
         name=name,
         status="DRAFT",
         host_code_hash=hash_code(host_code),
         allow_host_scoring=bool(allow_host_scoring),
+        presentation_mode=presentation_mode,
     )
     db.session.add(project)
     db.session.flush()  # project.id を採番させる
@@ -351,7 +367,9 @@ def transition_to_scoring(project: Project) -> Project:
         raise ProjectStateError("Only DRAFT projects can start scoring.")
 
     active_scorers = Scorer.query.filter_by(project_id=project.id, is_active=True).all()
-    subjects = Subject.query.filter_by(project_id=project.id).all()
+    subjects = (
+        Subject.query.filter_by(project_id=project.id).order_by(Subject.sort_order).all()
+    )
     if not active_scorers:
         raise ProjectStateError("At least one active scorer is required to start scoring.")
     if not subjects:
@@ -369,7 +387,14 @@ def transition_to_scoring(project: Project) -> Project:
                 Evaluation(project_id=project.id, scorer_id=scorer.id, subject_id=subject.id)
             )
 
+    if project.presentation_mode == "SEQUENTIAL":
+        # 最初のSubjectだけを採点可能にし、残りは待機させる。
+        for index, subject in enumerate(subjects):
+            subject.presentation_status = "SCORING" if index == 0 else "WAITING"
+
     project.status = "SCORING"
+    # Evaluationの一括生成・Subject状態の初期化・Project statusの更新を
+    # 1トランザクションで確定させる(途中commitは行わない)。
     db.session.commit()
     return project
 
@@ -378,11 +403,26 @@ def transition_to_locked(project: Project) -> Project:
     if project.status != "SCORING":
         raise ProjectStateError("Only SCORING projects can be locked.")
 
-    eligible_ids = eligible_scorer_ids(project.id)
-    if not eligible_ids:
-        raise ProjectStateError(
-            "Cannot lock: no eligible scorer has completed all subjects yet."
-        )
+    if project.presentation_mode == "SEQUENTIAL":
+        # SEQUENTIALではSubject単位で採点・締切・発表を終えており、Project全体の
+        # LOCKEDは最終ランキングへ進むための最後の一歩でしかない。
+        # forced closeの概念は持ち込まない(§lock_subjectを参照)。
+        pending = [
+            s
+            for s in Subject.query.filter_by(project_id=project.id).all()
+            if s.presentation_status != "PRESENTED"
+        ]
+        if pending:
+            raise ProjectStateError(
+                "Cannot lock: all subjects must be presented first "
+                f"({len(pending)} remaining)."
+            )
+    else:
+        eligible_ids = eligible_scorer_ids(project.id)
+        if not eligible_ids:
+            raise ProjectStateError(
+                "Cannot lock: no eligible scorer has completed all subjects yet."
+            )
 
     project.status = "LOCKED"
     project.locked_at = _utcnow()
@@ -406,6 +446,100 @@ def transition_to_finished(project: Project) -> Project:
     project.finished_at = _utcnow()
     db.session.commit()
     return project
+
+
+# ---------------------------------------------------------------------------
+# Subject単位の進行(SEQUENTIAL専用)
+# ---------------------------------------------------------------------------
+
+
+def _require_sequential(project: Project) -> None:
+    if project.presentation_mode != "SEQUENTIAL":
+        raise ProjectStateError(
+            "Subject-level progression is only available in SEQUENTIAL mode."
+        )
+    if project.status != "SCORING":
+        raise ProjectStateError(
+            "Subject-level progression is only available while the project is scoring."
+        )
+
+
+def submitted_scorer_ids_for_subject(project_id: int, subject_id: int) -> set[int]:
+    rows = (
+        db.session.query(Evaluation.scorer_id)
+        .filter(
+            Evaluation.project_id == project_id,
+            Evaluation.subject_id == subject_id,
+            Evaluation.status == "submitted",
+        )
+        .all()
+    )
+    return {scorer_id for (scorer_id,) in rows}
+
+
+def lock_subject(project: Project, subject: Subject) -> Subject:
+    """SEQUENTIAL: 1 Subjectの採点を締め切る(SCORING -> LOCKED)。
+
+    **forced closeは提供しない。** 参加Scorer全員の提出を必須にすることで、
+    どのSubjectも同じ人数で採点されている状態を保つ。人数が揃っていないと
+    Subject間で合計点を比較できず、最終ランキングが意味を失うため。
+    (BATCHは「未完了者を全Subjectから一律に除外する」という別の方法で
+     同じ不変条件を守っている)
+    """
+    _require_owned(project, subject, label="Subject")
+    _require_sequential(project)
+
+    # 二重クリックや同時requestでも壊れないよう、現在の状態を必ず読み直して検証する
+    if subject.presentation_status != "SCORING":
+        raise ProjectStateError(
+            f"Subject is not open for scoring (current status: {subject.presentation_status})."
+        )
+
+    participating = participating_scorer_ids(project.id)
+    submitted = submitted_scorer_ids_for_subject(project.id, subject.id)
+    missing = participating - submitted
+    if missing:
+        raise ProjectStateError(
+            "Cannot lock this subject: every participating scorer must submit first "
+            f"({len(missing)} of {len(participating)} still pending). "
+            "Forced close is not available in SEQUENTIAL mode."
+        )
+
+    subject.presentation_status = "LOCKED"
+    subject.locked_at = _utcnow()
+    db.session.commit()
+    return subject
+
+
+def present_subject(project: Project, subject: Subject) -> tuple[Subject, Subject | None]:
+    """SEQUENTIAL: 発表済みとして確定し、次のSubjectを採点可能にする。
+
+    当該SubjectのPRESENTED化と次SubjectのSCORING化は同一トランザクションで行う。
+    最後のSubjectの場合は次が無く、Project.statusはSCORINGのまま据え置く
+    (最終ランキングへはHostの明示操作でSCORING->LOCKED->PRESENTINGと進める)。
+    """
+    _require_owned(project, subject, label="Subject")
+    _require_sequential(project)
+
+    if subject.presentation_status != "LOCKED":
+        raise ProjectStateError(
+            f"Only a locked subject can be presented (current status: "
+            f"{subject.presentation_status})."
+        )
+
+    subject.presentation_status = "PRESENTED"
+    subject.presented_at = _utcnow()
+
+    next_subject = (
+        Subject.query.filter_by(project_id=project.id, presentation_status="WAITING")
+        .order_by(Subject.sort_order)
+        .first()
+    )
+    if next_subject is not None:
+        next_subject.presentation_status = "SCORING"
+
+    db.session.commit()
+    return subject, next_subject
 
 
 _TRANSITIONS = {
@@ -458,12 +592,52 @@ def get_progress(project: Project) -> dict:
 
     submitted_count = sum(1 for e in evaluations if e.status == "submitted")
 
+    participating_ids = participating_scorer_ids(project.id)
+    submitted_by_subject: dict[int, int] = defaultdict(int)
+    for evaluation in evaluations:
+        if evaluation.status == "submitted" and evaluation.scorer_id in participating_ids:
+            submitted_by_subject[evaluation.subject_id] += 1
+
+    subject_rows = []
+    for subject in subjects:
+        status = subject_presentation_status(project, subject)
+        subject_submitted = submitted_by_subject.get(subject.id, 0)
+        subject_rows.append(
+            {
+                "id": subject.id,
+                "name": subject.name,
+                "presentation_status": status,
+                "submitted_count": subject_submitted,
+                "scorer_count": len(participating_ids),
+                "pending_count": len(participating_ids) - subject_submitted,
+                # SEQUENTIALでこのSubjectを今すぐ締め切れるか
+                "can_lock": (
+                    project.presentation_mode == "SEQUENTIAL"
+                    and status == "SCORING"
+                    and len(participating_ids) > 0
+                    and subject_submitted == len(participating_ids)
+                ),
+            }
+        )
+
     return {
         "project_status": project.status,
-        "subjects": [{"id": s.id, "name": s.name} for s in subjects],
+        "presentation_mode": project.presentation_mode,
+        "subjects": subject_rows,
         "scorers": scorer_rows,
         "submitted_count": submitted_count,
         "total_count": len(evaluations),
         "eligible_scorer_count": len(eligible_ids),
         "incomplete_scorer_count": len(scorers) - len(eligible_ids),
+        "participating_scorer_count": len(participating_ids),
+        # SEQUENTIALで現在採点中のSubject(いなければNone)
+        "current_subject_id": next(
+            (r["id"] for r in subject_rows if r["presentation_status"] == "SCORING"), None
+        ),
+        # SEQUENTIALで発表待ち(締切済み)のSubject
+        "presentable_subject_id": next(
+            (r["id"] for r in subject_rows if r["presentation_status"] == "LOCKED"), None
+        ),
+        "all_subjects_presented": bool(subject_rows)
+        and all(r["presentation_status"] == "PRESENTED" for r in subject_rows),
     }
