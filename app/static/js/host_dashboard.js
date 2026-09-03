@@ -96,14 +96,19 @@
 
     const closeSection = document.getElementById("closeSection");
     const presentLink = document.getElementById("presentLink");
+    const analysisLink = document.getElementById("analysisLink");
     if (data.project_status === "SCORING") {
       closeSection.classList.remove("hidden");
       presentLink.classList.add("hidden");
+      analysisLink.classList.add("hidden");
     } else {
       closeSection.classList.add("hidden");
       if (["LOCKED", "PRESENTING", "FINISHED"].includes(data.project_status)) {
         presentLink.href = `/host/${projectId}/present`;
         presentLink.classList.remove("hidden");
+        // 分析はresult-summaryと同じくLOCKED以降でのみ開ける
+        analysisLink.href = `/host/${projectId}/analysis`;
+        analysisLink.classList.remove("hidden");
       }
     }
 

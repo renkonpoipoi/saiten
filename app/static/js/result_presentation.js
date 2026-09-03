@@ -201,6 +201,7 @@
     if (!currentSummary) return;
 
     document.getElementById("backToDashboardLink").href = `/host/${projectId}`;
+    document.getElementById("finishedAnalysisLink").href = `/host/${projectId}/analysis`;
 
     if (currentSummary.project.status === "LOCKED") {
       standbyPanel.classList.remove("hidden");

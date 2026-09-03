@@ -281,6 +281,66 @@ def eligible_scorer_ids(project_id: int) -> set[int]:
     return {scorer_id for scorer_id, submitted_count in rows if submitted_count == total_subjects}
 
 
+def participating_scorer_ids(project_id: int) -> set[int]:
+    """SCORING開始時点で固定された参加Scorerの集合を返す。
+
+    DRAFT->SCORING遷移がactive Scorer x SubjectのEvaluationを一括生成し、それ以降
+    Scorerの追加・削除は_require_draftガードにより不可能なため(DRAFTへ戻る遷移が
+    存在しない)、**Evaluation行そのものが参加Scorerのsnapshotになっている**。
+    このため専用のsnapshotテーブルは持たない。
+
+    この不変条件を壊さないため、SCORING開始後にScorerを増減させる操作や
+    is_activeを書き換える操作を追加してはならない。
+    """
+    rows = (
+        db.session.query(Evaluation.scorer_id)
+        .join(Scorer, Scorer.id == Evaluation.scorer_id)
+        .filter(Evaluation.project_id == project_id, Scorer.is_active.is_(True))
+        .distinct()
+        .all()
+    )
+    return {scorer_id for (scorer_id,) in rows}
+
+
+def official_scorer_ids(project: Project) -> set[int]:
+    """公式集計の対象になるScorer集合。モード差はこの1関数に閉じ込める。
+
+    - BATCH:      全Subjectを提出し終えたScorerのみ(=eligible scorer)。
+                  forced closeで未完了者を全Subjectから一律除外することで、
+                  Subject間の審査員数を揃えている。
+    - SEQUENTIAL: 参加Scorer全員。Subjectのlock条件が「全参加Scorerの提出」で
+                  あるため、発表可能なSubjectでは常に全員分が揃っている。
+                  (eligible判定は「全Subject提出済み」を要求するので、
+                   後続Subjectが未採点なSEQUENTIALの途中では常に空集合になり使えない)
+    """
+    if project.presentation_mode == "SEQUENTIAL":
+        return participating_scorer_ids(project.id)
+    return eligible_scorer_ids(project.id)
+
+
+# BATCHではSubject単位の進行状態を持たないため、Project.statusから導出する。
+_BATCH_SUBJECT_STATUS = {
+    "DRAFT": "WAITING",
+    "SCORING": "SCORING",
+    "LOCKED": "LOCKED",
+    "PRESENTING": "PRESENTED",
+    "FINISHED": "PRESENTED",
+}
+
+
+def subject_presentation_status(project: Project, subject: Subject) -> str:
+    """Subjectの進行状態を、モードの違いを隠して1つの語彙で返す。
+
+    subjects.presentation_status列はSEQUENTIALでのみ権威を持つ。BATCHでは
+    Project.statusから導出するため、Phase 8以前に作られた既存Projectの
+    'WAITING'という値が誤って表示されることはない(=migrationでの
+    データbackfillが不要)。
+    """
+    if project.presentation_mode == "SEQUENTIAL":
+        return subject.presentation_status
+    return _BATCH_SUBJECT_STATUS[project.status]
+
+
 # ---------------------------------------------------------------------------
 # 状態遷移
 # ---------------------------------------------------------------------------

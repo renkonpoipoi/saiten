@@ -82,6 +82,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .finished-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
 .finished-actions a.button { text-decoration: none; }
 
+.feedback-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.feedback-row:last-child { border-bottom: none; }
+.feedback-scorer { font-weight: 600; margin-bottom: 4px; }
+.feedback-text { color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 
