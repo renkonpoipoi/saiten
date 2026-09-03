@@ -6,7 +6,9 @@
 {% block content %}
 <div class="eyebrow">結果発表</div>
 
-<section id="standbyPanel" class="panel">
+{# 初期状態はhidden。JSがProject statusを見て必要な時だけ表示する
+   (FINISHED再訪問時に「発表を開始する」が一瞬見えてしまうのを防ぐ) #}
+<section id="standbyPanel" class="panel hidden">
   <h1>結果発表の準備ができました</h1>
   <p style="color:var(--muted)">開始すると、被採点者ごとに得点が順番に開示されます。</p>
   <button type="button" id="startRevealButton" class="primary">結果発表を開始する</button>
@@ -25,6 +27,19 @@
   <h1>最終ランキング</h1>
   <div id="rankingList" class="ranking-list"></div>
   <button type="button" id="finishButton" class="primary hidden">発表を終了する(PRESENTING &rarr; FINISHED)</button>
+</section>
+
+{# 発表完了後の導線。ここからの操作は全て表示のみで、Project statusは変更しない。 #}
+<section id="finishedPanel" class="panel hidden">
+  <h2>発表は終了しています</h2>
+  <p style="color:var(--muted)">
+    結果はこのあとも何度でも確認できます。もう一度発表演出を再生しても、プロジェクトの状態(FINISHED)は変わりません。
+  </p>
+  <div class="finished-actions">
+    <button type="button" id="replayButton" class="primary">発表をもう一度見る</button>
+    <button type="button" id="showRankingButton">最終ランキングを見る</button>
+    <a class="button" id="backToDashboardLink" href="#">Host Dashboardへ戻る</a>
+  </div>
 </section>
 {% endblock %}
 {% block extra_js %}

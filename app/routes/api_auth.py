@@ -24,6 +24,14 @@ def host_login():
 
     project = Project.query.filter_by(host_code_hash=hash_code(code)).first()
     if project is None:
+        # 認証に失敗した時点で、それまで保持していたHost権限は破棄する。
+        # ログイン画面を開いた時点で利用者は「別のホストとして入り直す」意図を
+        # 持っているため、誤ったコードを入力した結果として前のプロジェクトの
+        # ホストのまま留まるのは意外性がある。
+        # (Phase 8A-1でプロジェクト作成時にHost sessionを張るようになったため、
+        #  この破棄がないと「作成直後に誤コードでログイン失敗しても権限が残る」
+        #  という状態が生まれる。)
+        session.pop("host_project_id", None)
         raise ForbiddenError("Invalid host code.")
 
     session["host_project_id"] = project.id
@@ -46,6 +54,9 @@ def scorer_login():
 
     scorer = Scorer.query.filter_by(access_code_hash=hash_code(code), is_active=True).first()
     if scorer is None:
+        # host-loginと同じ方針で、認証失敗時は既存のScorer権限を破棄する。
+        session.pop("scorer_id", None)
+        session.pop("scorer_project_id", None)
         raise ForbiddenError("Invalid scorer code.")
 
     project = db.session.get(Project, scorer.project_id)

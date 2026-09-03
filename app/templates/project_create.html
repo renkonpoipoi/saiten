@@ -54,7 +54,12 @@
   </table>
 
   <p style="margin-top:20px;">
-    <a class="button" id="goToHostLoginLink">このコードでホストとしてログイン</a>
+    <a class="button primary" id="goToHostDashboardLink">ホストダッシュボードへ</a>
+  </p>
+  <p style="color:var(--muted); font-size:.9rem;">
+    このブラウザはこのプロジェクトのホストとしてログイン済みです。
+    別の端末・別のブラウザ・後日のログインには、上のホストコードが必要です。
+    <a href="/host/login" id="goToHostLoginLink">ホストコードでログイン</a>
   </p>
 </section>
 {% endblock %}

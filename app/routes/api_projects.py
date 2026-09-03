@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from app.auth.decorators import require_host
 from app.errors import NotFoundError
-from app.extensions import db
+from app.extensions import db, limiter
 from app.models import Criterion, Project, Scorer, Subject
 from app.services import project_service
 
 api_projects_bp = Blueprint("api_projects", __name__, url_prefix="/api")
+
+# 作成APIは認証を要求できない(まだプロジェクトが存在しないため)一方で、
+# 成功時にHost sessionを発行する。無制限にProject+sessionを量産されないよう
+# rate limitをかける。ログイン用の制限(10 per minute)とは用途が違うため別値。
+PROJECT_CREATE_RATE_LIMIT = "20 per hour"
 
 
 def _get_project_or_404(project_id: int) -> Project:
@@ -68,6 +73,7 @@ def _serialize_project_detail(project: Project) -> dict:
 
 
 @api_projects_bp.post("/projects")
+@limiter.limit(PROJECT_CREATE_RATE_LIMIT)
 def create_project():
     data = request.get_json(silent=True) or {}
     result = project_service.create_project(
@@ -78,6 +84,14 @@ def create_project():
         allow_host_scoring=bool(data.get("allow_host_scoring")),
     )
     project = result["project"]
+
+    # 作成したブラウザはそのプロジェクトのHostであることが自明(平文のhost_codeを
+    # このレスポンスで受け取っている)ため、host codeの再入力を求めずsessionを張る。
+    # host code自体は引き続き発行・hash保存され、別ブラウザ・別端末・session消失後の
+    # ログインには必須のまま。既存のhost-loginと同様、sessionが保持できるHost権限は
+    # 常に1プロジェクト分だけである点も変わらない。
+    session["host_project_id"] = project.id
+
     return (
         jsonify(
             {

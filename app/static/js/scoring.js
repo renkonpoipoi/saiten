@@ -1,6 +1,9 @@
 (function () {
   const subjectId = window.SUBJECT_ID;
   const AUTOSAVE_DEBOUNCE_MS = 360;
+  // 確定後は複数の被採点者を続けて採点できるよう一覧へ戻す。確定した旨を
+  // 読み取れる程度の間だけ待ってから遷移する。
+  const SUBMIT_REDIRECT_DELAY_MS = 1200;
 
   let evaluationId = null;
   let evaluationDetail = null;
@@ -127,8 +130,12 @@
       evaluationDetail = await apiFetch(`/api/evaluations/${evaluationId}/submit`, {
         method: "POST",
       });
-      showMessage("確定しました");
+      showMessage("提出しました。一覧へ戻ります…");
+      // 先にreadonly表示へ切り替えておく(遷移前に確定済みだと分かるように)
       render();
+      setTimeout(() => {
+        window.location.href = "/scorer";
+      }, SUBMIT_REDIRECT_DELAY_MS);
     } catch (err) {
       showMessage(err.message, { isError: true });
     }

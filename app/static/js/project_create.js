@@ -75,7 +75,8 @@
     createdPanel.classList.remove("hidden");
 
     // 表示上のURLだけ変える。実ページ遷移・再読み込み時のGET再取得は発生しない。
-    // reload後は(サーバーにコードが残っていないため)このコードを再表示できない。
+    // reload後は(サーバーにコードが残っていないため)このコードを再表示できないが、
+    // このURL自体は実ルートなので404にはならず、Host Dashboardへ案内される。
     if (window.history && window.history.pushState) {
       window.history.pushState({}, "", `/projects/${result.project_id}/created`);
     }
@@ -102,7 +103,8 @@
       tbody.appendChild(tr);
     });
 
-    document.getElementById("goToHostLoginLink").href = "/host/login";
+    // 作成APIがHost sessionを張っているため、host codeの再入力なしで移動できる。
+    document.getElementById("goToHostDashboardLink").href = `/host/${result.project_id}`;
 
     document.querySelectorAll("[data-copy-target]").forEach((button) => {
       button.addEventListener("click", () => {

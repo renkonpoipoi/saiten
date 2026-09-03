@@ -79,6 +79,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .home-actions { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .home-actions a.button { display: block; text-align: center; text-decoration: none; padding: 24px 16px; }
 
+.finished-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.finished-actions a.button { text-decoration: none; }
+
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 
