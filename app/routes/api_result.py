@@ -7,13 +7,13 @@ Host session必須で、LOCKED以降でのみ取得可能とする。
 
 from __future__ import annotations
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, Response, jsonify
 
 from app.auth.decorators import require_host
 from app.errors import ConflictError, NotFoundError
 from app.extensions import db
 from app.models import Project
-from app.services import result_service
+from app.services import export_service, result_service
 
 api_result_bp = Blueprint("api_result", __name__, url_prefix="/api")
 
@@ -49,3 +49,35 @@ def get_result_summary(project_id: int):
 def get_analysis(project_id: int):
     project = _get_project_for_results(project_id)
     return jsonify(result_service.build_analysis(project))
+
+
+@api_result_bp.get("/projects/<int:project_id>/export.csv")
+@require_host
+def export_csv(project_id: int):
+    project = _get_project_for_results(project_id)
+    analysis = result_service.build_analysis(project)
+    ascii_name, utf8_name = export_service.csv_filename(analysis)
+    return Response(
+        export_service.build_csv(analysis),
+        mimetype="text/csv",
+        headers={
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": export_service.content_disposition(ascii_name, utf8_name),
+        },
+    )
+
+
+@api_result_bp.get("/projects/<int:project_id>/export.md")
+@require_host
+def export_markdown(project_id: int):
+    project = _get_project_for_results(project_id)
+    analysis = result_service.build_analysis(project)
+    ascii_name, utf8_name = export_service.markdown_filename(analysis)
+    return Response(
+        export_service.build_markdown(analysis),
+        mimetype="text/markdown",
+        headers={
+            "Content-Type": "text/markdown; charset=utf-8",
+            "Content-Disposition": export_service.content_disposition(ascii_name, utf8_name),
+        },
+    )

@@ -26,6 +26,9 @@
     document.getElementById("projectStatusBadge").textContent = data.project.status;
     document.getElementById("backToDashboardLink").href = `/host/${projectId}`;
     document.getElementById("presentLink").href = `/host/${projectId}/present`;
+    document.getElementById("exportCsvLink").href = `/api/projects/${projectId}/export.csv`;
+    document.getElementById("exportMarkdownLink").href =
+      `/api/projects/${projectId}/export.md`;
 
     document.getElementById("analysisSummary").textContent =
       `公式集計対象: ${data.official_scorer_count}名 / ` +
