@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}結果発表 - M1風採点アプリ{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/reveal.css') }}">
+{% endblock %}
+{% block content %}
+<div class="eyebrow">結果発表</div>
+
+{# 初期状態はhidden。JSがProject statusを見て必要な時だけ表示する
+   (FINISHED再訪問時に「発表を開始する」が一瞬見えてしまうのを防ぐ) #}
+<section id="standbyPanel" class="panel hidden">
+  <h1>結果発表の準備ができました</h1>
+  <p style="color:var(--muted)">開始すると、被採点者ごとに得点が順番に開示されます。</p>
+  <button type="button" id="startRevealButton" class="primary">結果発表を開始する</button>
+</section>
+
+{# --- SEQUENTIAL専用のパネル群。BATCHでは一度も表示しない --- #}
+<section id="sequentialWaitingPanel" class="panel hidden">
+  <h1>採点中です</h1>
+  <p id="sequentialWaitingText" style="color:var(--muted)"></p>
+  <p style="color:var(--muted); font-size:.85rem;">
+    採点者全員の提出が揃うと、Host Dashboardからこの被採点者を締め切れます。
+  </p>
+  {# この画面はプロジェクターに出したままにすることが多いので、Host Dashboardは
+     別タブで開く。発表画面側の進行状態(polling)は維持される。 #}
+  <div class="finished-actions">
+    <a class="button" id="sequentialDashboardLink" href="#" target="_blank" rel="noopener">
+      ホストダッシュボードへ(別タブ)
+    </a>
+  </div>
+</section>
+
+<section id="sequentialStandbyPanel" class="panel hidden">
+  <h1><span id="sequentialSubjectName">-</span> の得点発表</h1>
+  <p style="color:var(--muted)">採点者ごとの得点を1人ずつ開示します。</p>
+  <button type="button" id="revealSubjectButton" class="primary">この被採点者の得点を発表する</button>
+</section>
+
+<section id="confirmNextPanel" class="panel hidden">
+  <h2>この結果を確定しますか?</h2>
+  <p style="color:var(--muted)">確定すると発表済みになり、次の被採点者の採点が始まります。</p>
+  <button type="button" id="confirmNextButton" class="primary">確定して次へ</button>
+</section>
+
+<section id="finalRankingPanel" class="panel hidden">
+  <h1>全員の発表が終わりました</h1>
+  <p style="color:var(--muted)">最終ランキングへ進みます。</p>
+  <button type="button" id="finalRankingButton" class="primary">最終ランキングへ</button>
+</section>
+
+<section id="revealStage" class="reveal-stage hidden">
+  <div class="reveal-board">
+    <div class="reveal-eyebrow">REVEALING</div>
+    <div class="reveal-subject-name" id="revealSubjectName">-</div>
+    <div class="reveal-judges" id="revealJudgeRow"></div>
+    <div class="reveal-total" id="revealTotal">0</div>
+  </div>
+</section>
+
+<section id="rankingPanel" class="panel hidden">
+  <h1>最終ランキング</h1>
+  <div id="rankingList" class="ranking-list"></div>
+
+  {# 最終ランキング表示中に必ず残る導線。BATCH / SEQUENTIAL のどちらも
+     showRanking() 経由でここを表示するため、両モードで同じ実体を共有する。
+     ここに hidden が付いたままになると袋小路になるので、showRanking() が
+     毎回 hidden を外す。 #}
+  <div id="rankingActions" class="finished-actions">
+    <button type="button" id="finishButton" class="primary hidden">発表を終了する(PRESENTING &rarr; FINISHED)</button>
+    <button type="button" id="replayButton" class="hidden">発表をもう一度見る</button>
+    <a class="button" id="backToDashboardLink" href="#">ホストダッシュボードへ</a>
+    <a class="button" id="finishedAnalysisLink" href="#">結果分析を見る</a>
+  </div>
+</section>
+
+{# 発表完了後の補足。ここからの操作は全て表示のみで、Project statusは変更しない。 #}
+<section id="finishedPanel" class="panel hidden">
+  <h2>発表は終了しています</h2>
+  <p style="color:var(--muted)">
+    結果はこのあとも何度でも確認できます。もう一度発表演出を再生しても、プロジェクトの状態(FINISHED)は変わりません。
+  </p>
+  <div class="finished-actions">
+    <button type="button" id="showRankingButton">最終ランキングを見る</button>
+  </div>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script>window.PROJECT_ID = {{ project_id }};</script>
+<script src="{{ url_for('static', filename='js/result_presentation.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}プロジェクト作成済み - M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">プロジェクト作成済み</div>
+
+<section class="panel">
+  <h1>このプロジェクトは作成済みです</h1>
+  <p style="color:var(--muted)">
+    ホストコードと参加コードはサーバーにハッシュしか保存されていないため、作成直後の画面を離れると再表示できません。
+  </p>
+  <p style="color:var(--gold)">
+    コードを控えていない場合は、ホストとしてログインしたうえで Host Settings から再発行してください。
+    再発行すると以前のコードは無効になります。
+  </p>
+
+  <p style="margin-top:20px;">
+    <a class="button primary" href="{{ url_for('pages.host_dashboard_page', project_id=project_id) }}">ホストダッシュボードへ</a>
+    <a class="button" href="{{ url_for('pages.host_login_page') }}" style="margin-left:12px;">ホストコードでログイン</a>
+  </p>
+</section>
+{% endblock %}

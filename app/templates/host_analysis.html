@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}結果分析 - M1風採点アプリ{% endblock %}
+{% block content %}
+<div class="eyebrow">結果分析</div>
+<h1 id="projectNameHeading">読み込み中...</h1>
+<p>
+  状態: <span id="projectStatusBadge" class="badge">-</span>
+  <a href="#" id="backToDashboardLink" style="margin-left:12px;">Host Dashboardへ戻る</a>
+  <a href="#" id="presentLink" style="margin-left:12px;">結果発表へ</a>
+</p>
+
+<section class="panel">
+  <h2>サマリー</h2>
+  <p id="analysisSummary" style="color:var(--muted)"></p>
+  <p id="excludedNotice" class="hidden" style="color:var(--gold)"></p>
+  <div class="finished-actions">
+    <a class="button" id="exportCsvLink" href="#">CSVをダウンロード</a>
+    <a class="button" id="exportMarkdownLink" href="#">Markdownをダウンロード</a>
+  </div>
+  <p style="color:var(--muted); font-size:.85rem;">
+    CSVはExcelでそのまま開ける形式(UTF-8 BOM付き)です。ホストコード・参加コードは出力されません。
+  </p>
+</section>
+
+<section class="panel">
+  <h2>最終ランキング</h2>
+  <table>
+    <thead><tr><th>順位</th><th>被採点者</th><th>合計</th><th>平均</th></tr></thead>
+    <tbody id="rankingTableBody"></tbody>
+  </table>
+</section>
+
+<div id="subjectSections"></div>
+{% endblock %}
+{% block extra_js %}
+<script>window.PROJECT_ID = {{ project_id }};</script>
+<script src="{{ url_for('static', filename='js/radar_chart.js') }}"></script>
+<script src="{{ url_for('static', filename='js/host_analysis.js') }}"></script>
+{% endblock %}
