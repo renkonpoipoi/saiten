@@ -200,8 +200,10 @@ def test_presentation_static_assets_served(client):
         "/static/css/reveal.css",
         "/static/js/common.js",
         "/static/js/result_presentation.js",
-        "/static/assets/reveal-hit.m4a",
-        "/static/assets/reveal-sting.m4a",
+        "/static/css/reveal.css",
+        "/static/js/presentation/core.js",
+        "/static/js/presentation/audio.js",
+        "/static/assets/sfx/manifest.js",
     ):
         resp = client.get(path)
         assert resp.status_code == 200, f"{path} -> {resp.status_code}"
@@ -226,15 +228,33 @@ def test_presentation_dom_ids_match_js_expectations(client, db):
         assert f'id="{element_id}"' in html, f"JS references missing DOM id: {element_id}"
 
 
-def test_result_presentation_js_audio_paths_exist(client):
-    js = (APP_DIR / "static" / "js" / "result_presentation.js").read_text(encoding="utf-8")
-    for audio_path in re.findall(r'new Audio\("([^"]+)"\)', js):
-        assert client.get(audio_path).status_code == 200, f"missing audio: {audio_path}"
+def test_presentation_audio_is_manifest_driven(client):
+    """効果音は必ずマニフェスト経由。JS内にファイルパスを直書きしない。
+
+    Phase 9でAudioBusに集約した。マニフェストが空でもPresentationは完全に
+    動作するため、素材が1つも無い状態でもここは成立する。
+    """
+    js_dir = APP_DIR / "static" / "js"
+    for js_file in sorted(js_dir.rglob("*.js")):
+        js = js_file.read_text(encoding="utf-8")
+        assert not re.findall(r'new Audio\("', js), f"{js_file.name}: 音源パスの直書き"
+
+    manifest = (APP_DIR / "static" / "assets" / "sfx" / "manifest.js").read_text(
+        encoding="utf-8"
+    )
+    assert "window.PRESENTATION_SFX" in manifest
+    # マニフェストに登録済みの素材は必ず配信できること(空なら何も検証しない)。
+    # コメントアウトされた記述例は登録済みではないので対象外。
+    active = "\n".join(
+        line for line in manifest.splitlines() if not line.lstrip().startswith("//")
+    )
+    for path in re.findall(r'"(/static/[^"]+)"', active):
+        assert client.get(path).status_code == 200, f"missing sfx: {path}"
 
 
 def test_all_js_files_pass_syntax_check():
     js_dir = APP_DIR / "static" / "js"
-    for js_file in sorted(js_dir.glob("*.js")):
+    for js_file in sorted(js_dir.rglob("*.js")):
         result = subprocess.run(["node", "--check", str(js_file)], capture_output=True, text=True)
         assert result.returncode == 0, f"{js_file.name}: {result.stderr}"
 

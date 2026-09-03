@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}">
   {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
   <div id="messageBox" class="toast hidden" role="status"></div>
   <main class="app-shell">
     {% block content %}{% endblock %}

@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block title %}結果発表 - M1風採点アプリ{% endblock %}
+{% block body_class %}presentation-body{% endblock %}
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/reveal.css') }}">
 {% endblock %}
 {% block content %}
-<div class="eyebrow">結果発表</div>
+<div id="presentationRoot" class="p-root">
 
 {# 初期状態はhidden。JSがProject statusを見て必要な時だけ表示する
    (FINISHED再訪問時に「発表を開始する」が一瞬見えてしまうのを防ぐ) #}
@@ -12,6 +13,20 @@
   <h1>結果発表の準備ができました</h1>
   <p style="color:var(--muted)">開始すると、被採点者ごとに得点が順番に開示されます。</p>
   <button type="button" id="startRevealButton" class="primary">結果発表を開始する</button>
+</section>
+
+{# --- BATCH: 被採点者1組ごとに停止する進行パネル。Judge単位のクリックは要求しない --- #}
+<section id="batchSubjectPanel" class="panel hidden">
+  <h1><span id="batchSubjectName">-</span> の得点発表</h1>
+  <p style="color:var(--muted)">採点者ごとの得点を1人ずつ開示し、最後に合計点を発表します。</p>
+  <button type="button" id="batchRevealButton" class="primary">得点発表を始める</button>
+</section>
+
+{# BATCHの次アクション。ラベルは最終被採点者かどうかでJSが切り替える
+   (「次の被採点者へ」/「最終ランキングを発表する」)。 #}
+<section id="batchAdvancePanel" class="panel hidden">
+  <p id="batchAdvanceNote" style="color:var(--muted)"></p>
+  <button type="button" id="batchAdvanceButton" class="primary">次の被採点者へ</button>
 </section>
 
 {# --- SEQUENTIAL専用のパネル群。BATCHでは一度も表示しない --- #}
@@ -33,7 +48,7 @@
 <section id="sequentialStandbyPanel" class="panel hidden">
   <h1><span id="sequentialSubjectName">-</span> の得点発表</h1>
   <p style="color:var(--muted)">採点者ごとの得点を1人ずつ開示します。</p>
-  <button type="button" id="revealSubjectButton" class="primary">この被採点者の得点を発表する</button>
+  <button type="button" id="revealSubjectButton" class="primary">得点発表を始める</button>
 </section>
 
 <section id="confirmNextPanel" class="panel hidden">
@@ -42,23 +57,40 @@
   <button type="button" id="confirmNextButton" class="primary">確定して次へ</button>
 </section>
 
+{# SEQUENTIALの最終確定。演出は既にFINAL RANKINGまで完了しており、
+   ここを押したときだけ server の状態遷移を実行する
+   (animationの完了だけでlifecycleを進めない)。 #}
 <section id="finalRankingPanel" class="panel hidden">
-  <h1>全員の発表が終わりました</h1>
-  <p style="color:var(--muted)">最終ランキングへ進みます。</p>
-  <button type="button" id="finalRankingButton" class="primary">最終ランキングへ</button>
+  <h2>最終結果を確定しますか?</h2>
+  <p style="color:var(--muted)">確定すると発表済みとして記録され、結果分析などの導線が開きます。</p>
+  <button type="button" id="finalRankingButton" class="primary">最終結果を確定する</button>
 </section>
 
-<section id="revealStage" class="reveal-stage hidden">
-  <div class="reveal-board">
-    <div class="reveal-eyebrow">REVEALING</div>
-    <div class="reveal-subject-name" id="revealSubjectName">-</div>
-    <div class="reveal-judges" id="revealJudgeRow"></div>
-    <div class="reveal-total" id="revealTotal">0</div>
+<section id="revealStage" class="p-stage hidden" data-phase="idle">
+  <header class="p-stage__head">
+    <div class="p-eyebrow" id="revealEyebrow">RESULT</div>
+    <h2 class="p-subject" id="revealSubjectName">-</h2>
+  </header>
+
+  {# 中央レイヤ。下部railのslotはDOM上で動かさず、ここに別要素として
+     active judge card / TOTAL を出す(layout安定性と保守性のため)。 #}
+  <div class="p-center" id="revealCenter">
+    <div class="p-active" id="activeJudgeCard" data-state="idle">
+      <div class="p-active__name" id="activeJudgeName"></div>
+      <div class="p-active__score" id="activeJudgeScore"></div>
+    </div>
+    <div class="p-total" id="revealTotal" data-state="idle">
+      <div class="p-total__label">TOTAL</div>
+      <div class="p-total__value" id="revealTotalValue">0</div>
+    </div>
   </div>
+
+  {# 全Judgeのslotを最初から並べる。未開示は「—」+暗いスコアウィンドウ。 #}
+  <footer class="p-rail" id="revealJudgeRow" data-rows="1"></footer>
 </section>
 
-<section id="rankingPanel" class="panel hidden">
-  <h1>最終ランキング</h1>
+<section id="rankingPanel" class="panel hidden" data-layout="column" data-final="false" data-preserved="false">
+  <h1 class="p-ranking__title" id="rankingTitle">最終ランキング</h1>
   <div id="rankingList" class="ranking-list"></div>
 
   {# 最終ランキング表示中に必ず残る導線。BATCH / SEQUENTIAL のどちらも
@@ -83,8 +115,20 @@
     <button type="button" id="showRankingButton">最終ランキングを見る</button>
   </div>
 </section>
+
+{# 観客画面を邪魔しないよう右下に小さく置く。Phase 9BでJSが配線し、
+   auto-hideの秒数はPhase 9Eの実ブラウザ調整で決める。 #}
+<div id="stageControls" class="p-controls hidden" data-visible="false">
+  <button type="button" id="fullscreenButton">全画面</button>
+  <button type="button" id="skipButton">スキップ</button>
+</div>
+
+</div>
 {% endblock %}
 {% block extra_js %}
 <script>window.PROJECT_ID = {{ project_id }};</script>
+<script src="{{ url_for('static', filename='assets/sfx/manifest.js') }}"></script>
+<script src="{{ url_for('static', filename='js/presentation/core.js') }}"></script>
+<script src="{{ url_for('static', filename='js/presentation/audio.js') }}"></script>
 <script src="{{ url_for('static', filename='js/result_presentation.js') }}"></script>
 {% endblock %}

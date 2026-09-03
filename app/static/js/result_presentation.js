@@ -11,34 +11,25 @@
   // 再描画だけで行い、サーバーの状態は一切変更しない。
   let currentSummary = null;
 
-  let hitAudio = null;
-  let stingAudio = null;
+  // 効果音は presentation/audio.js の AudioBus に委譲する。素材が1つも
+  // 無くても完全に no-op になるため、state machine は戻り値を参照しない
+  // (音は装飾であり進行条件ではない)。
+  const audio = window.PresentationAudio;
 
   function prepareAudio() {
-    if (!hitAudio) {
-      hitAudio = new Audio("/static/assets/reveal-hit.m4a");
-      stingAudio = new Audio("/static/assets/reveal-sting.m4a");
-    }
+    if (audio) audio.prime();
+  }
+
+  function playSfx(key) {
+    if (audio) audio.play(key);
   }
 
   function playHit() {
-    if (!hitAudio) return;
-    try {
-      hitAudio.currentTime = 0;
-      hitAudio.play().catch(() => {});
-    } catch (err) {
-      /* 再生できない環境では無視する */
-    }
+    playSfx("judgeHit");
   }
 
   function playSting() {
-    if (!stingAudio) return;
-    try {
-      stingAudio.currentTime = 0;
-      stingAudio.play().catch(() => {});
-    } catch (err) {
-      /* 再生できない環境では無視する */
-    }
+    playSfx("total");
   }
 
   function wait(ms) {
@@ -124,8 +115,9 @@
     document.getElementById("revealSubjectName").textContent = subject.name;
     const judgeRow = document.getElementById("revealJudgeRow");
     judgeRow.innerHTML = "";
-    const totalEl = document.getElementById("revealTotal");
+    const totalEl = document.getElementById("revealTotalValue");
     totalEl.textContent = "0";
+    document.getElementById("revealTotal").dataset.state = "revealed";
 
     let runningTotal = 0;
     for (const judge of subject.judge_totals) {

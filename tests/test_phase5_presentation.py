@@ -121,16 +121,21 @@ def test_result_summary_includes_tie_ranking(client, app, db):
 # ---------------------------------------------------------------------------
 
 
-def test_reveal_audio_assets_are_served(client):
-    resp = client.get("/static/assets/reveal-hit.m4a")
-    assert resp.status_code == 200
-    resp = client.get("/static/assets/reveal-sting.m4a")
-    assert resp.status_code == 200
+def test_broadcast_derived_audio_assets_are_gone(client):
+    """Phase 9: 実在人物の放送音声由来だった暫定素材への依存を外した。
+
+    Phase 5では暫定素材2件の配信を検証していたが、Phase 9で正式に削除し、
+    効果音はマニフェスト駆動(素材0個でも完全動作)に置き換えた。
+    """
+    assert client.get("/static/assets/reveal-hit.m4a").status_code == 404
+    assert client.get("/static/assets/reveal-sting.m4a").status_code == 404
+    # 置き換え先のマニフェストは常に配信される
+    assert client.get("/static/assets/sfx/manifest.js").status_code == 200
 
 
 def test_js_files_have_no_syntax_errors():
     js_dir = Path(__file__).resolve().parent.parent / "app" / "static" / "js"
-    for js_file in js_dir.glob("*.js"):
+    for js_file in js_dir.rglob("*.js"):
         result = subprocess.run(
             ["node", "--check", str(js_file)], capture_output=True, text=True
         )

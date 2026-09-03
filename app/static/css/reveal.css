@@ -1,90 +1,451 @@
-/* M1風の得点開示演出。旧resultアプリの「画像を使わずCSSグラデーション
-   /box-shadowで筐体を再現する」というアプローチを踏襲しつつ、新規に
-   書き直したスタイル(旧result.cssのファイル自体は再利用しない)。 */
+/* Presentation (結果発表) の視覚基盤。Phase 9A。
 
-.reveal-stage {
-  border-radius: 18px;
-  padding: 40px 24px;
-  background: radial-gradient(circle at top, #2a1420 0%, #10060c 70%);
-  border: 1px solid #3a1c28;
-  box-shadow: inset 0 0 60px rgba(0, 0, 0, .6);
+   方針:
+   - PC / プロジェクター / 16:9 を最優先。全サイズを --u の倍数で書き、
+     1280x720 から 3840x2160 まで見た目が相似になるようにする。
+   - BLACK + ANTIQUE GOLD + DEEP RED + IVORY。Gold はベタ塗りにせず
+     gradient + highlight + dim で金属感を出す。
+   - Glow は常時 OFF。Score Reveal / TOTAL / Winner の瞬間だけ点灯する。
+   - token は .p-root スコープに閉じ、common.css と他ページには影響させない。
+   - :has() / container query は使わない(対象ブラウザ以外でも壊れないため)。 */
+
+/* ---------------------------------------------------------------------------
+   1. 全画面化: 発表画面だけ app-shell の 960px 制約を外す
+   --------------------------------------------------------------------------- */
+.presentation-body {
+  background: #050505;
+}
+
+.presentation-body .app-shell {
+  max-width: none;
+  padding: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   2. token
+   --------------------------------------------------------------------------- */
+.p-root {
+  /* 16:9 のとき常に「ステージ幅の 1%」になるスケール単位 */
+  --u: min(1vw, 1.777vh);
+
+  --p-bg-0: #050505;
+  --p-bg-1: #0b0907;
+  --p-panel: #12100d;
+  --p-panel-deep: #0a0908;
+
+  --p-gold: #d6b35a;
+  --p-gold-hi: #f3d77a;
+  --p-gold-dim: #8a7239;
+
+  --p-red: #7d111b;
+  --p-red-hi: #a71924;
+
+  --p-ivory: #f6f0df;
+  --p-sub: #a49c8c;
+  --p-line: rgba(214, 179, 90, .28);
+
+  --p-gold-grad: linear-gradient(160deg, #f3d77a 0%, #d6b35a 38%, #8a7239 100%);
+  --p-glow: 0 0 calc(var(--u) * 2.4) rgba(214, 179, 90, .45);
+  --p-glow-strong: 0 0 calc(var(--u) * 4) rgba(243, 215, 122, .55);
+
+  --p-serif: "Yu Mincho", "YuMincho", "Hiragino Mincho ProN", "Noto Serif JP", serif;
+
+  /* 尺は JS(core.js) が単一の真実源。applyTiming() がここへ書き出す。
+     以下は JS 未実行時のフォールバック。 */
+  --t-subject-intro: 600ms;
+  --t-judge-enter: 450ms;
+  --t-judge-hold: 500ms;
+  --t-judge-score: 250ms;
+  --t-judge-visible: 1000ms;
+  --t-judge-settle: 400ms;
+  --t-total-enter: 500ms;
+  --t-rank-insert: 600ms;
+  --t-rank-move: 750ms;
+  --t-rank-settled: 500ms;
+  --t-quick-group: 430ms;
+  --t-top-enter: 700ms;
+  --t-winner-reveal: 900ms;
+
+  min-height: 100vh;
+  color: var(--p-ivory);
+  /* 完全な黒ではなく、中央に極暗い赤褐色 + 外周 vignette で奥行きを出す。
+     動画背景や canvas animation は使わない。 */
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 42%, rgba(125, 17, 27, .16) 0%, rgba(125, 17, 27, 0) 62%),
+    radial-gradient(ellipse 80% 70% at 50% 45%, var(--p-bg-1) 0%, var(--p-bg-0) 72%),
+    var(--p-bg-0);
+  padding: calc(var(--u) * 2) calc(var(--u) * 2) calc(var(--u) * 3);
+}
+
+/* 発表画面内の既存 .panel を presentation token へ寄せる(他ページには無影響) */
+.p-root .panel {
+  background: var(--p-panel);
+  border-color: var(--p-line);
+  max-width: calc(var(--u) * 62);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.p-root .panel h1,
+.p-root .panel h2 {
+  font-family: var(--p-serif);
+  letter-spacing: .04em;
+}
+
+.p-root .panel p {
+  color: var(--p-sub) !important;
+}
+
+.p-root button.primary {
+  background: var(--p-gold-grad);
+  border-color: var(--p-gold);
+  color: #1c1508;
+}
+
+.p-root .button,
+.p-root button {
+  border-color: var(--p-line);
+  background: var(--p-panel-deep);
+  color: var(--p-ivory);
+}
+
+.p-root button.primary {
+  color: #1c1508;
+}
+
+/* ---------------------------------------------------------------------------
+   3. 16:9 ステージ
+   --------------------------------------------------------------------------- */
+.p-stage {
+  position: relative;
+  width: min(100%, calc(100vh * 16 / 9));
+  aspect-ratio: 16 / 9;
+  margin: 0 auto;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  align-items: center;
+  overflow: hidden;
+}
+
+.p-stage__head {
   text-align: center;
-  margin-bottom: 20px;
+  padding-top: calc(var(--u) * 2);
 }
 
-.reveal-board { max-width: 640px; margin: 0 auto; }
-
-.reveal-eyebrow {
-  color: var(--gold);
-  letter-spacing: .3em;
-  font-size: .75rem;
-  margin-bottom: 12px;
+.p-eyebrow {
+  font-family: var(--p-serif);
+  color: var(--p-gold);
+  letter-spacing: .42em;
+  font-size: calc(var(--u) * 1.5);
+  text-indent: .42em;
 }
 
-.reveal-subject-name {
-  font-size: clamp(1.6rem, 5vw, 2.6rem);
+.p-subject {
+  margin: calc(var(--u) * .8) 0 0;
+  font-size: calc(var(--u) * 4.2);
   font-weight: 800;
-  margin-bottom: 20px;
-  text-shadow: 0 0 20px rgba(242, 193, 78, .35);
+  letter-spacing: .04em;
+  line-height: 1.15;
+  color: var(--p-ivory);
+  overflow-wrap: anywhere;
+  padding: 0 calc(var(--u) * 6);
 }
 
-.reveal-judges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: center;
-  min-height: 48px;
-  margin-bottom: 20px;
+/* 中央レイヤ。active judge card と TOTAL がここで入れ替わる。 */
+.p-center {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
 }
 
-.judge-score-bubble {
-  padding: 8px 14px;
-  border-radius: 10px;
-  background: #1c0f14;
-  border: 1px solid #402030;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  animation: bubbleIn .25s ease-out;
+/* ---------------------------------------------------------------------------
+   4. 中央 Active Judge card
+   Judge数に関係なくサイズは一定。下からせり上がるように見せる。
+   --------------------------------------------------------------------------- */
+.p-active {
+  position: absolute;
+  min-width: calc(var(--u) * 26);
+  padding: calc(var(--u) * 2.4) calc(var(--u) * 3.4);
+  border-radius: calc(var(--u) * 1.2);
+  border: 1px solid var(--p-line);
+  background: linear-gradient(180deg, var(--p-panel) 0%, var(--p-panel-deep) 100%);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .18), 0 calc(var(--u) * 1.4) calc(var(--u) * 3) rgba(0, 0, 0, .6);
+  text-align: center;
+  opacity: 0;
+  transform: translateY(calc(var(--u) * 7)) scale(.65);
+  transition:
+    opacity var(--t-judge-enter) ease-out,
+    transform var(--t-judge-enter) cubic-bezier(.22, .61, .36, 1);
+  pointer-events: none;
 }
-.judge-score-bubble .name { display: block; font-size: .7rem; color: var(--muted); }
-.judge-score-bubble .score { font-size: 1.2rem; font-weight: 700; }
-.judge-score-bubble.gold { border-color: var(--gold); color: var(--gold); box-shadow: 0 0 16px rgba(242, 193, 78, .5); }
-.judge-score-bubble.silver { border-color: #cfd6e4; color: #eef1f6; box-shadow: 0 0 12px rgba(207, 214, 228, .4); }
-.judge-score-bubble.bronze { border-color: #c98a53; color: #f0c9a4; box-shadow: 0 0 12px rgba(201, 138, 83, .4); }
 
-@keyframes bubbleIn {
-  from { transform: scale(.6); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
+.p-active[data-state="enter"],
+.p-active[data-state="revealed"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 
-.reveal-total {
-  font-size: clamp(3rem, 12vw, 6rem);
+.p-active[data-state="settle"] {
+  opacity: 0;
+  transform: translateY(calc(var(--u) * -1.5)) scale(.92);
+  transition-duration: var(--t-judge-settle);
+}
+
+.p-active__name {
+  font-size: calc(var(--u) * 2.1);
+  font-weight: 700;
+  color: var(--p-sub);
+  letter-spacing: .06em;
+  overflow-wrap: anywhere;
+}
+
+.p-active__score {
+  margin-top: calc(var(--u) * .6);
+  font-size: calc(var(--u) * 7.5);
   font-weight: 900;
-  color: var(--gold);
-  text-shadow: 0 0 30px rgba(242, 193, 78, .5);
-  animation: totalPop .3s ease-out;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--p-ivory);
+  min-height: calc(var(--u) * 7.5);
+  opacity: 0;
+  transform: scale(1.18);
+  transition:
+    opacity var(--t-judge-score) ease-out,
+    transform var(--t-judge-score) cubic-bezier(.22, .61, .36, 1);
 }
 
-@keyframes totalPop {
-  from { transform: scale(.9); }
-  to { transform: scale(1); }
+.p-active[data-state="revealed"] .p-active__score {
+  opacity: 1;
+  transform: scale(1);
+  /* Glow はこの瞬間だけ。常時は光らせない。 */
+  text-shadow: 0 0 calc(var(--u) * 2.6) rgba(243, 215, 122, .55);
+}
+
+/* ---------------------------------------------------------------------------
+   5. TOTAL
+   Judge score とはサイズ・枠・色・背後の赤で明確に格を変える。
+   --------------------------------------------------------------------------- */
+.p-total {
+  position: absolute;
+  padding: calc(var(--u) * 2.2) calc(var(--u) * 5);
+  border-radius: calc(var(--u) * 1.2);
+  border: 1px solid var(--p-gold);
+  background:
+    radial-gradient(ellipse 90% 120% at 50% 50%, rgba(125, 17, 27, .22) 0%, rgba(125, 17, 27, 0) 70%),
+    linear-gradient(180deg, var(--p-panel) 0%, var(--p-panel-deep) 100%);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .28);
+  text-align: center;
+  opacity: 0;
+  transform: translateY(calc(var(--u) * 3)) scale(.9);
+  transition:
+    opacity var(--t-total-enter) ease-out,
+    transform var(--t-total-enter) cubic-bezier(.22, .61, .36, 1),
+    box-shadow var(--t-total-enter) ease-out;
+  pointer-events: none;
+}
+
+.p-total[data-state="revealed"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .28), var(--p-glow-strong);
+}
+
+.p-total__label {
+  font-family: var(--p-serif);
+  font-size: calc(var(--u) * 1.8);
+  letter-spacing: .5em;
+  text-indent: .5em;
+  color: var(--p-gold);
+}
+
+.p-total__value {
+  margin-top: calc(var(--u) * .4);
+  font-size: calc(var(--u) * 11);
+  font-weight: 900;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  background: var(--p-gold-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: var(--p-gold-hi);
+}
+
+@supports (-webkit-text-fill-color: transparent) {
+  .p-total__value {
+    -webkit-text-fill-color: transparent;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   6. Judge rail (下部固定)
+   DOM上は動かさない。中央カードは別レイヤの単一要素で表現する。
+   --cols / --slot-scale は core.js の railLayout() が決めて JS が流し込む。
+   --------------------------------------------------------------------------- */
+.p-rail {
+  --cols: 5;
+  --slot-scale: 3.2;
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  gap: calc(var(--u) * 1.1);
+  width: 88%;
+  margin: 0 auto;
+  padding-bottom: calc(var(--u) * 2.5);
+  justify-content: center;
+}
+
+.p-slot {
+  min-width: 0;
+  padding: calc(var(--u) * .9) calc(var(--u) * .6);
+  border-radius: calc(var(--u) * .7);
+  border: 1px solid rgba(214, 179, 90, .16);
+  background: var(--p-panel-deep);
+  box-shadow: inset 0 calc(var(--u) * .25) calc(var(--u) * .8) rgba(0, 0, 0, .75);
+  text-align: center;
+  transition: border-color var(--t-judge-settle) ease-out, box-shadow var(--t-judge-settle) ease-out;
+}
+
+.p-slot[data-state="active"] {
+  border-color: var(--p-gold-dim);
+}
+
+.p-slot[data-state="revealed"] {
+  border-color: var(--p-line);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .12);
+}
+
+.p-slot__score {
+  font-size: calc(var(--u) * var(--slot-scale));
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: #4b463c;
+  transition: color var(--t-judge-settle) ease-out;
+}
+
+.p-slot[data-state="revealed"] .p-slot__score {
+  color: var(--p-ivory);
+}
+
+.p-slot__name {
+  margin-top: calc(var(--u) * .25);
+  font-size: calc(var(--u) * 1.1);
+  color: var(--p-sub);
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  max-height: calc(var(--u) * 2.8);
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------------------
+   7. auto-hide controls (Phase 9B で JS 配線, 9E で秒数調整)
+   display:none にはせず opacity で隠す(keyboard focus で必ず可視化するため)。
+   --------------------------------------------------------------------------- */
+.p-controls {
+  position: fixed;
+  right: calc(var(--u) * 1.6);
+  bottom: calc(var(--u) * 1.6);
+  display: flex;
+  gap: calc(var(--u) * .8);
+  z-index: 20;
+  opacity: .06;
+  transition: opacity 320ms ease-out;
+}
+
+.p-controls[data-visible="true"],
+.p-controls:hover,
+.p-controls:focus-within {
+  opacity: 1;
+}
+
+.p-root .p-controls button {
+  font-size: calc(var(--u) * 1.1);
+  padding: calc(var(--u) * .7) calc(var(--u) * 1.2);
+}
+
+.p-root .p-controls button:focus-visible {
+  outline: 2px solid var(--p-gold-hi);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   8. ランキング (Phase 9C / 9D で本実装。ここでは基礎スタイルのみ)
+   --------------------------------------------------------------------------- */
+.p-ranking__title {
+  font-family: var(--p-serif);
+  text-align: center;
+  font-size: calc(var(--u) * 3.4);
+  letter-spacing: .12em;
+  color: var(--p-gold);
+  margin-bottom: calc(var(--u) * 1.6);
 }
 
 .ranking-list { display: flex; flex-direction: column; gap: 10px; }
+
 .ranking-row {
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 14px 18px;
   border-radius: 12px;
-  background: #171a21;
-  border: 1px solid var(--line);
+  background: var(--p-panel);
+  border: 1px solid var(--p-line);
 }
+
 .ranking-row .rank {
+  font-family: var(--p-serif);
   font-size: 1.6rem;
   font-weight: 900;
-  color: var(--gold);
-  min-width: 3ch;
+  color: var(--p-gold);
+  min-width: 4ch;
 }
-.ranking-row.rank-1 { border-color: var(--gold); box-shadow: 0 0 20px rgba(242, 193, 78, .25); }
-.ranking-row .name { flex: 1; font-size: 1.1rem; font-weight: 700; }
-.ranking-row .score { color: var(--muted); font-family: ui-monospace, SFMono-Regular, monospace; }
+
+.ranking-row.rank-1 {
+  border-color: var(--p-gold);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .2);
+}
+
+.ranking-row .name { flex: 1; font-size: 1.1rem; font-weight: 700; overflow-wrap: anywhere; }
+.ranking-row .score { color: var(--p-sub); font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------------------
+   9. 旧 reveal engine の互換スタイル (Phase 9B で engine ごと撤去する)
+   --------------------------------------------------------------------------- */
+.judge-score-bubble {
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--p-panel-deep);
+  border: 1px solid var(--p-line);
+  text-align: center;
+}
+.judge-score-bubble .name { display: block; font-size: .7rem; color: var(--p-sub); }
+.judge-score-bubble .score { font-size: 1.2rem; font-weight: 700; }
+
+/* ---------------------------------------------------------------------------
+   10. reduced motion
+   動きだけを止め、尺(間)は変えない。最終値が正しく出ることを最優先する。
+   --------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .p-root *,
+  .p-root *::before,
+  .p-root *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .p-active,
+  .p-total {
+    transform: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   11. 小さい画面での破綻回避 (Presentation はPC優先だが操作不能にはしない)
+   --------------------------------------------------------------------------- */
+@media (max-width: 700px) {
+  .p-stage { aspect-ratio: auto; min-height: 78vh; }
+  .p-root { --u: min(1.6vw, 1.777vh); }
+  .p-subject { padding: 0 calc(var(--u) * 2); }
+  .p-rail { width: 96%; }
+}
