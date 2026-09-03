@@ -2,9 +2,20 @@
 {% block title %}Scorer Dashboard - M1風採点アプリ{% endblock %}
 {% block content %}
 <div class="eyebrow">Scorer Dashboard</div>
-<h1>担当する被採点者</h1>
-<p id="progressSummary" style="color:var(--muted)"></p>
-<div id="subjectRows" class="progress-grid"></div>
+
+{# ProjectがDRAFTの間はEvaluationがまだ生成されない。0/0件の空画面ではなく、
+   まだ始まっていないことを明示する(自動更新はしない)。 #}
+<section id="notStartedPanel" class="panel hidden">
+  <h1>まだ採点は開始されていません</h1>
+  <p style="color:var(--muted)">ホストが採点を開始すると、ここに被採点者が表示されます。</p>
+  <button type="button" id="reloadDashboardButton">再読み込み</button>
+</section>
+
+<div id="scoringPanel" class="hidden">
+  <h1>担当する被採点者</h1>
+  <p id="progressSummary" style="color:var(--muted)"></p>
+  <div id="subjectRows" class="progress-grid"></div>
+</div>
 {% endblock %}
 {% block extra_js %}
 <script src="{{ url_for('static', filename='js/scorer_dashboard.js') }}"></script>

@@ -21,6 +21,13 @@
   <p style="color:var(--muted); font-size:.85rem;">
     採点者全員の提出が揃うと、Host Dashboardからこの被採点者を締め切れます。
   </p>
+  {# この画面はプロジェクターに出したままにすることが多いので、Host Dashboardは
+     別タブで開く。発表画面側の進行状態(polling)は維持される。 #}
+  <div class="finished-actions">
+    <a class="button" id="sequentialDashboardLink" href="#" target="_blank" rel="noopener">
+      ホストダッシュボードへ(別タブ)
+    </a>
+  </div>
 </section>
 
 <section id="sequentialStandbyPanel" class="panel hidden">
@@ -53,20 +60,27 @@
 <section id="rankingPanel" class="panel hidden">
   <h1>最終ランキング</h1>
   <div id="rankingList" class="ranking-list"></div>
-  <button type="button" id="finishButton" class="primary hidden">発表を終了する(PRESENTING &rarr; FINISHED)</button>
+
+  {# 最終ランキング表示中に必ず残る導線。BATCH / SEQUENTIAL のどちらも
+     showRanking() 経由でここを表示するため、両モードで同じ実体を共有する。
+     ここに hidden が付いたままになると袋小路になるので、showRanking() が
+     毎回 hidden を外す。 #}
+  <div id="rankingActions" class="finished-actions">
+    <button type="button" id="finishButton" class="primary hidden">発表を終了する(PRESENTING &rarr; FINISHED)</button>
+    <button type="button" id="replayButton" class="hidden">発表をもう一度見る</button>
+    <a class="button" id="backToDashboardLink" href="#">ホストダッシュボードへ</a>
+    <a class="button" id="finishedAnalysisLink" href="#">結果分析を見る</a>
+  </div>
 </section>
 
-{# 発表完了後の導線。ここからの操作は全て表示のみで、Project statusは変更しない。 #}
+{# 発表完了後の補足。ここからの操作は全て表示のみで、Project statusは変更しない。 #}
 <section id="finishedPanel" class="panel hidden">
   <h2>発表は終了しています</h2>
   <p style="color:var(--muted)">
     結果はこのあとも何度でも確認できます。もう一度発表演出を再生しても、プロジェクトの状態(FINISHED)は変わりません。
   </p>
   <div class="finished-actions">
-    <button type="button" id="replayButton" class="primary">発表をもう一度見る</button>
     <button type="button" id="showRankingButton">最終ランキングを見る</button>
-    <a class="button" id="backToDashboardLink" href="#">Host Dashboardへ戻る</a>
-    <a class="button" id="finishedAnalysisLink" href="#">結果分析を見る</a>
   </div>
 </section>
 {% endblock %}

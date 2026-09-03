@@ -24,6 +24,13 @@
   }
 
   function render(data) {
+    // DRAFT中はEvaluationが存在しないため、一覧ではなく「未開始」を出す。
+    // SCORING以降(LOCKED/PRESENTING/FINISHED含む)は従来どおり一覧を出す。
+    const notStarted = data.project_status === "DRAFT";
+    document.getElementById("notStartedPanel").classList.toggle("hidden", !notStarted);
+    document.getElementById("scoringPanel").classList.toggle("hidden", notStarted);
+    if (notStarted) return;
+
     document.getElementById("progressSummary").textContent =
       `${data.submitted_count} / ${data.total_count} 件 提出済み`;
 
@@ -51,6 +58,12 @@
       container.appendChild(el);
     });
   }
+
+  // 採点開始をhostが行うまでは何も起きないので、pollingではなく手動の再読み込み
+  // だけを用意する。
+  document.getElementById("reloadDashboardButton").addEventListener("click", () => {
+    load();
+  });
 
   load();
 })();

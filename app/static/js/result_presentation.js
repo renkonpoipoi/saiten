@@ -4,6 +4,7 @@
   const standbyPanel = document.getElementById("standbyPanel");
   const revealStage = document.getElementById("revealStage");
   const rankingPanel = document.getElementById("rankingPanel");
+  const rankingActions = document.getElementById("rankingActions");
   const finishedPanel = document.getElementById("finishedPanel");
 
   // 取得済みの集計結果。FINISHED後のreplay/ランキング再表示は全てこの値の
@@ -100,8 +101,22 @@
       list.appendChild(row);
     });
 
+    renderRankingActions(summary);
+  }
+
+  // 最終ランキングに常設する導線。BATCH / SEQUENTIAL 共通で、showRanking()から
+  // 必ず呼ぶ。ランキングを出した結果ここがhiddenのままになると袋小路になるため、
+  // action area自体のhiddenは毎回無条件で外す。
+  function renderRankingActions(summary) {
+    rankingActions.classList.remove("hidden");
+
     const finishButton = document.getElementById("finishButton");
     finishButton.classList.toggle("hidden", summary.project.status !== "PRESENTING");
+
+    // 再生はFINISHED後だけ。PRESENTING中は「発表を終了する」を先に押させる。
+    document
+      .getElementById("replayButton")
+      .classList.toggle("hidden", summary.project.status !== "FINISHED");
   }
 
   async function revealSubject(subject, theoreticalMax) {
@@ -190,7 +205,15 @@
         body: JSON.stringify({ target_status: "FINISHED" }),
       });
       showMessage("発表を終了しました");
-      document.getElementById("finishButton").classList.add("hidden");
+      // 手元のsummaryもFINISHEDに揃えて、導線を「終了する」から「もう一度見る」へ
+      // 差し替える。サーバーからの再取得はしない(GET以外も発生させない)。
+      if (currentSummary) {
+        currentSummary.project.status = "FINISHED";
+        renderRankingActions(currentSummary);
+      } else {
+        document.getElementById("finishButton").classList.add("hidden");
+      }
+      setFinishedPanelVisible(true);
     } catch (err) {
       showMessage(err.message, { isError: true });
     }
@@ -383,6 +406,9 @@
   async function init() {
     document.getElementById("backToDashboardLink").href = `/host/${projectId}`;
     document.getElementById("finishedAnalysisLink").href = `/host/${projectId}/analysis`;
+    // SEQUENTIALの採点待ち画面用。発表画面を出したまま別タブで進捗を見るため
+    // target="_blank"(テンプレート側)で開く。
+    document.getElementById("sequentialDashboardLink").href = `/host/${projectId}`;
 
     const state = await loadState();
     if (!state) return;

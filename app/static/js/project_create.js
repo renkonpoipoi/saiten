@@ -73,6 +73,22 @@
     }
   });
 
+  const BULK_COPY_FAILED_MESSAGE =
+    "コピーできませんでした。表示されているコードを手動で控えてください。";
+
+  function scorerLabel(scorer) {
+    return scorer.display_name + (scorer.is_host_scorer ? "(ホスト)" : "");
+  }
+
+  /** 参加者へ配布する採点者コードだけを1行ずつ並べたテキスト。
+   *
+   * ホストコードは意図的に含めない(参加者向けSlack/LINE等へ誤って
+   * ホストコードを配ってしまうのを防ぐため)。
+   */
+  function buildScorerCodeText(scorers) {
+    return scorers.map((scorer) => `${scorerLabel(scorer)}: ${scorer.code}`).join("\n");
+  }
+
   function showCreated(result) {
     formPanel.classList.add("hidden");
     createdPanel.classList.remove("hidden");
@@ -91,7 +107,7 @@
     result.scorers.forEach((scorer) => {
       const tr = document.createElement("tr");
       const nameTd = document.createElement("td");
-      nameTd.textContent = scorer.display_name + (scorer.is_host_scorer ? "(ホスト)" : "");
+      nameTd.textContent = scorerLabel(scorer);
       const codeTd = document.createElement("td");
       const code = document.createElement("code");
       code.textContent = scorer.code;
@@ -105,6 +121,23 @@
       tr.append(nameTd, codeTd, copyTd);
       tbody.appendChild(tr);
     });
+
+    // 一括コピーの中身は作成レスポンスからその場で組み立てるだけ。
+    // サーバーへコードを送り直すことも、再取得することもしない。
+    const scorerCodeText = buildScorerCodeText(result.scorers);
+    document
+      .getElementById("copyAllScorerCodesButton")
+      .addEventListener("click", () => {
+        // clipboardが使えない環境ではhelperがfallbackする。それも失敗した場合に
+        // 画面が壊れないよう、同期例外とrejectionの両方を握りつぶして通知に変える。
+        try {
+          copyToClipboard(scorerCodeText)
+            .then(() => showMessage("参加者コードをコピーしました"))
+            .catch(() => showMessage(BULK_COPY_FAILED_MESSAGE, { isError: true }));
+        } catch (err) {
+          showMessage(BULK_COPY_FAILED_MESSAGE, { isError: true });
+        }
+      });
 
     // 作成APIがHost sessionを張っているため、host codeの再入力なしで移動できる。
     document.getElementById("goToHostDashboardLink").href = `/host/${result.project_id}`;

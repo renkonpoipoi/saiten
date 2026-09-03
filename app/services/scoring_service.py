@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from app.errors import ConflictError, ValidationError
 from app.extensions import db
-from app.models import Criterion, Evaluation, EvaluationScore, Project, Subject
+from app.models import Criterion, Evaluation, EvaluationScore, Project, Scorer, Subject
 from app.services import project_service
 
 EVALUATION_STATUS_NOT_STARTED = "not_started"
@@ -53,9 +53,10 @@ def get_scorer_dashboard(scorer_id: int) -> dict:
         .order_by(Subject.sort_order)
         .all()
     )
-    project = (
-        db.session.get(Project, evaluations[0].project_id) if evaluations else None
-    )
+    # DRAFT中はEvaluationがまだ1件も存在しないため、所属Projectは必ずScorer側から
+    # 引く(evaluations[0]起点だとDRAFTでNoneになり、状態を画面へ伝えられない)。
+    scorer = db.session.get(Scorer, scorer_id)
+    project = db.session.get(Project, scorer.project_id) if scorer else None
 
     rows = []
     for evaluation in evaluations:
@@ -87,6 +88,9 @@ def get_scorer_dashboard(scorer_id: int) -> dict:
         "subjects": rows,
         "submitted_count": submitted_count,
         "total_count": len(rows),
+        # DRAFT中(=Evaluation未生成)を空リストと区別して画面に伝えるためだけの
+        # 表示用フィールド。既存keyの意味は変えていない。
+        "project_status": project.status if project else None,
     }
 
 
