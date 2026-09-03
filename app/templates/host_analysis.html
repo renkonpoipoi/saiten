@@ -34,5 +34,6 @@
 {% endblock %}
 {% block extra_js %}
 <script>window.PROJECT_ID = {{ project_id }};</script>
+<script src="{{ url_for('static', filename='js/radar_chart.js') }}"></script>
 <script src="{{ url_for('static', filename='js/host_analysis.js') }}"></script>
 {% endblock %}

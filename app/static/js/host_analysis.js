@@ -141,7 +141,20 @@
         `公式集計対象 ${subject.scorer_count}名`;
       section.appendChild(summary);
 
-      section.appendChild(criterionAverageTable(subject));
+      const breakdown = document.createElement("div");
+      breakdown.className = "criterion-breakdown";
+
+      const chart = document.createElement("div");
+      chart.className = "radar-container";
+      RadarChart.render(chart, subject.criterion_averages);
+      breakdown.appendChild(chart);
+
+      const tableWrapper = document.createElement("div");
+      tableWrapper.className = "criterion-table";
+      tableWrapper.appendChild(criterionAverageTable(subject));
+      breakdown.appendChild(tableWrapper);
+
+      section.appendChild(breakdown);
 
       const official = feedbackList(subject.evaluations, true);
       if (official) section.appendChild(official);
