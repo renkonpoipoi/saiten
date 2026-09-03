@@ -157,6 +157,42 @@
     return row;
   }
 
+  /** rank group を1枚のカードとして描く。同率は同じカードの中に横並びで入れる。
+      「同率1位 A・B」のように、存在しない順位を作らないための単位。 */
+  function buildRankGroupCard(group, groups) {
+    var card = document.createElement("div");
+    card.className = "p-rank-card";
+    card.dataset.rank = String(group.rank);
+    card.dataset.tied = group.tied ? "true" : "false";
+    card.dataset.top = group.rank <= 3 ? "true" : "false";
+
+    var label = document.createElement("div");
+    label.className = "p-rank-card__rank";
+    label.textContent = core.groupLabel(group);
+    card.appendChild(label);
+
+    var members = document.createElement("div");
+    members.className = "p-rank-card__members";
+    group.subjects.forEach(function (subject) {
+      var member = document.createElement("div");
+      member.className = "p-rank-card__member";
+      member.dataset.subjectId = String(subject.id);
+
+      var name = document.createElement("div");
+      name.className = "p-rank-card__name";
+      name.textContent = subject.name;
+
+      var score = document.createElement("div");
+      score.className = "p-rank-card__score";
+      score.textContent = String(subject.total_score);
+
+      member.append(name, score);
+      members.appendChild(member);
+    });
+    card.appendChild(members);
+    return card;
+  }
+
   function sortedByRank(subjects) {
     return (subjects || []).slice().sort(function (a, b) {
       return (a.rank - b.rank) || (a.sort_order - b.sort_order);
@@ -216,6 +252,7 @@
   var api = {
     UNREVEALED: UNREVEALED,
     buildRankingRow: buildRankingRow,
+    buildRankGroupCard: buildRankGroupCard,
     sortedByRank: sortedByRank,
     renderRankingColumn: renderRankingColumn,
     flipRows: flipRows,

@@ -26,6 +26,8 @@
     total: document.getElementById("revealTotal"),
     totalValue: document.getElementById("revealTotalValue"),
     rankingList: document.getElementById("rankingList"),
+    rankingTop: document.getElementById("rankingTop"),
+    rankingRest: document.getElementById("rankingRest"),
     rankingTitle: document.getElementById("rankingTitle"),
   };
 
@@ -209,9 +211,11 @@
     rankingPanel.classList.remove("hidden");
     rankingPanel.dataset.preserved = "false";
 
-    rankingPanel.dataset.winner = "true";
-    stage.setRankingTitle(stageRefs, FINAL_RANKING_TITLE);
-    renderRankingList(stage.sortedByRank(summary.subjects), null);
+    rankingPanel.dataset.layout = core.finalLayout(
+      summary.subjects, core.toRankGroups(summary.subjects)
+    );
+    stage.setRankingTitle(stageRefs, FINAL_RESULT_TITLE);
+    showFinalRankingFinalState(summary);
 
     renderRankingActions(summary);
   }
@@ -289,12 +293,103 @@
     startBatchPresentation(currentSummary);
   }
 
-  // Phase 9D で演出付きのFinal Ranking Revealに差し替える。
-  function showBatchFinalRanking() {
-    showRanking(currentSummary);
-    if (currentSummary.project.status === "FINISHED") {
-      setFinishedPanelVisible(true);
+  // ---------------------------------------------------------------------------
+  // BATCH: Final Ranking Reveal
+  //
+  // 途中では公式順位を一切出さず、Hostが「最終ランキングを発表する」を
+  // 押してから完全自動で走る。下位は速く積み上げ、上位はゆっくり大きく、
+  // 1位が最大演出。Reveal単位は Subject ではなく rank group。
+  // ---------------------------------------------------------------------------
+
+  const FINAL_RESULT_TITLE = "FINAL RESULT";
+
+  function prepareFinalRankingStage(summary) {
+    const subjects = summary.subjects;
+    const groups = core.toRankGroups(subjects);
+    showOnly(rankingPanel);
+    rankingPanel.dataset.layout = core.finalLayout(subjects, groups);
+    rankingPanel.dataset.final = "true";
+    rankingPanel.dataset.winner = "false";
+    rankingPanel.dataset.preserved = "false";
+    rankingActions.classList.add("hidden");
+    stage.setRankingTitle(stageRefs, FINAL_RESULT_TITLE);
+    stageRefs.rankingTop.innerHTML = "";
+    stageRefs.rankingRest.innerHTML = "";
+    return groups;
+  }
+
+  function groupByRank(groups, rank) {
+    return groups.find((group) => group.rank === rank);
+  }
+
+  /** rank group を1枚のカードとして描く。同率は横並びで同時に出す。 */
+  function appendGroupCard(container, group, groups, state) {
+    const card = stage.buildRankGroupCard(group, groups);
+    card.dataset.reveal = state;
+    // 下位は下から上へ積み上がり、上位も 3位 -> 2位 -> 1位 の順に上へ載る
+    container.insertBefore(card, container.firstChild);
+    return card;
+  }
+
+  function applyFinalStep(step, groups) {
+    switch (step.phase) {
+      case "QUICK_GROUP": {
+        appendGroupCard(stageRefs.rankingRest, groupByRank(groups, step.rank), groups, "settled");
+        playSfx("rankTick");
+        break;
+      }
+      case "TOP_GROUP_ENTER": {
+        appendGroupCard(stageRefs.rankingTop, groupByRank(groups, step.rank), groups, "enter");
+        playSfx("rankSettle");
+        break;
+      }
+      case "TOP_GROUP_SETTLE":
+      case "WINNER_SETTLE": {
+        const card = stageRefs.rankingTop.firstChild;
+        if (card) card.dataset.reveal = "settled";
+        break;
+      }
+      case "WINNER_REVEAL": {
+        appendGroupCard(stageRefs.rankingTop, groupByRank(groups, step.rank), groups, "enter");
+        rankingPanel.dataset.winner = "true";
+        playSfx("winner");
+        break;
+      }
+      default:
+        break;
     }
+  }
+
+  /** Skip / reduced motion 用。完成した最終ランキングを即座に作る。 */
+  function showFinalRankingFinalState(summary) {
+    const subjects = summary.subjects;
+    const groups = core.toRankGroups(subjects);
+    stageRefs.rankingTop.innerHTML = "";
+    stageRefs.rankingRest.innerHTML = "";
+    groups.forEach((group) => {
+      const container = group.rank <= 3 ? stageRefs.rankingTop : stageRefs.rankingRest;
+      const card = stage.buildRankGroupCard(group, groups);
+      card.dataset.reveal = "settled";
+      container.appendChild(card);
+    });
+    rankingPanel.dataset.winner = "true";
+    rankingPanel.dataset.final = "true";
+  }
+
+  async function runBatchFinalRanking() {
+    const summary = currentSummary;
+    const groups = prepareFinalRankingStage(summary);
+    return playSequence({
+      steps: core.buildBatchFinalSteps(groups),
+      applyStep: (step) => applyFinalStep(step, groups),
+      finalState: () => showFinalRankingFinalState(summary),
+      onComplete: () => {
+        renderRankingActions(summary);
+        if (summary.project.status === "FINISHED") {
+          setFinishedPanelVisible(true);
+        }
+      },
+    });
   }
 
   document.getElementById("batchRevealButton").addEventListener("click", async () => {
@@ -305,9 +400,9 @@
     await revealSubjectSequence(subject, showBatchAdvance);
   });
 
-  document.getElementById("batchAdvanceButton").addEventListener("click", () => {
+  document.getElementById("batchAdvanceButton").addEventListener("click", async () => {
     if (isLastBatchSubject()) {
-      showBatchFinalRanking();
+      await runBatchFinalRanking();
       return;
     }
     showBatchSubjectStandby(batchIndex + 1);
@@ -595,13 +690,13 @@
         // 並べ替え前後の位置差を測って既存行を移動させる(FLIP)。
         // 新規行は自前の登場アニメーションに任せる。
         stage.flipRows(
-          stageRefs.rankingList,
+          stageRefs.rankingRest,
           () => renderRankingList(stage.sortedByRank(subjects), incomingId),
           core.TIMING.rankMove
         );
         break;
       case "RANK_SETTLED":
-        stage.clearRowTransforms(stageRefs.rankingList);
+        stage.clearRowTransforms(stageRefs.rankingRest);
         clearRankingHighlight();
         playSfx("rankSettle");
         break;
@@ -617,21 +712,24 @@
     }
   }
 
+  // 1列表示(SEQUENTIALの暫定ランキングと、column レイアウトの最終ランキング)。
+  // 3レイアウトともDOM構造は共通で、並べ方だけを data-layout でCSSが変える。
   function renderRankingList(subjects, highlightId) {
     const groups = core.toRankGroups(subjects);
-    stageRefs.rankingList.innerHTML = "";
+    stageRefs.rankingTop.innerHTML = "";
+    stageRefs.rankingRest.innerHTML = "";
     subjects.forEach((subject) => {
       const row = stage.buildRankingRow(subject, groups);
       if (highlightId != null && subject.id === highlightId) {
         row.dataset.highlight = "true";
       }
       if (subject.rank === 1) row.dataset.top = "true";
-      stageRefs.rankingList.appendChild(row);
+      stageRefs.rankingRest.appendChild(row);
     });
   }
 
   function clearRankingHighlight() {
-    Array.from(stageRefs.rankingList.children).forEach((row) => {
+    Array.from(stageRefs.rankingRest.children).forEach((row) => {
       delete row.dataset.highlight;
     });
   }
@@ -643,7 +741,7 @@
 
   function showSequentialRankingFinalState(subjects, incomingId, isLast) {
     renderRankingList(stage.sortedByRank(subjects), null);
-    stage.clearRowTransforms(stageRefs.rankingList);
+    stage.clearRowTransforms(stageRefs.rankingRest);
     if (isLast) {
       markRankingFinal();
       rankingPanel.dataset.winner = "true";

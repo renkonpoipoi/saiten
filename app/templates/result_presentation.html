@@ -91,7 +91,12 @@
 
 <section id="rankingPanel" class="panel p-ranking hidden" data-layout="column" data-final="false" data-preserved="false" data-winner="false">
   <h1 class="p-ranking__title" id="rankingTitle">最終ランキング</h1>
-  <div id="rankingList" class="ranking-list"></div>
+  {# レイアウト(hero / column / split)はSubject数と同率の広がりで決まり、
+     data-layout をCSSが見て並べ方だけを変える。DOM構造は3種類とも共通。 #}
+  <div id="rankingList" class="p-ranking__grid">
+    <div class="p-ranking__top" id="rankingTop"></div>
+    <div class="p-ranking__rest" id="rankingRest"></div>
+  </div>
 
   {# 最終ランキング表示中に必ず残る導線。BATCH / SEQUENTIAL のどちらも
      showRanking() 経由でここを表示するため、両モードで同じ実体を共有する。

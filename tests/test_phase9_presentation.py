@@ -567,3 +567,124 @@ def test_no_new_migrations_were_added_in_phase9():
         "9c4e17a2b8d3_add_presentation_modes.py",
         "b37d61517847_initial_schema.py",
     ], revisions
+
+
+# ---------------------------------------------------------------------------
+# Phase 9D: BATCH Final Ranking
+# ---------------------------------------------------------------------------
+
+
+def test_final_ranking_containers_exist(client, db):
+    html = _present_html(client)
+    grid = re.search(r'<div id="rankingList"[^>]*>(.*?)</div>\s*\n', html, re.S)
+    assert grid, "rankingListが見つからない"
+    assert 'id="rankingTop"' in html
+    assert 'id="rankingRest"' in html
+
+
+def test_batch_shows_no_ranking_until_the_final_reveal(client, db):
+    """各TOTALは見えても、順位は最後まで伏せること。"""
+    js = _presentation_js()
+
+    # 得点発表sequenceはランキングに触れない
+    body = _function_body(js, "function applySubjectStep(")
+    for token in ("ranking", "Ranking"):
+        assert token not in body, token
+
+    # 被採点者間の進行もランキングを描かない
+    advance = _function_body(js, "function showBatchAdvance(")
+    assert "ranking" not in advance.lower()
+
+    # 順位が出るのは Final Reveal を明示的に始めたときだけ
+    button = _function_body(js, 'getElementById("batchAdvanceButton").addEventListener')
+    assert "runBatchFinalRanking(" in button
+    assert "isLastBatchSubject()" in button
+
+
+def test_final_reveal_is_fully_automatic_once_started(client, db):
+    """「最終ランキングを発表する」の1クリックから完成まで自動で走ること。"""
+    js = _presentation_js()
+    body = _function_body(js, "async function runBatchFinalRanking(")
+    assert "core.buildBatchFinalSteps(" in body
+    assert "playSequence({" in body
+    # 途中でHostの操作を挟まない
+    assert "addEventListener" not in body
+    # サーバーにも触れない
+    for token in ("apiFetch", "target_status", "transition"):
+        assert token not in body, token
+
+
+def test_final_reveal_is_driven_by_rank_groups_not_subjects(client, db):
+    """Revealの単位が Subject ではなく rank group であること(同率対応)。"""
+    js = _presentation_js()
+    prepare = _function_body(js, "function prepareFinalRankingStage(")
+    assert "core.toRankGroups(" in prepare
+    assert "core.finalLayout(" in prepare
+
+    body = _function_body(js, "function applyFinalStep(")
+    assert "groupByRank(groups, step.rank)" in body
+    for phase in ("QUICK_GROUP", "TOP_GROUP_ENTER", "WINNER_REVEAL"):
+        assert f'case "{phase}"' in body, phase
+
+
+def test_tied_groups_are_revealed_together_in_one_card(client, db):
+    stage_js = (PRESENTATION_JS_DIR / "stage.js").read_text(encoding="utf-8")
+    body = _function_body(stage_js, "function buildRankGroupCard(")
+    # 1グループ = 1カード。同率メンバーは同じカードの中に入る。
+    assert "group.subjects.forEach(" in body
+    assert "core.groupLabel(group)" in body
+    assert 'card.dataset.tied' in body
+
+    css = _reveal_css()
+    assert '.p-rank-card[data-tied="true"] .p-rank-card__members' in css
+
+
+def test_lower_ranks_stack_upwards_and_top_ranks_land_above_them(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "function appendGroupCard(")
+    # 下位は 10位 -> 9位 ... の順に出るので、毎回先頭へ差し込むと下から積み上がる
+    assert "container.insertBefore(card, container.firstChild)" in body
+
+
+def test_final_layouts_cover_every_subject_count(client, db):
+    css = _reveal_css()
+    for layout in ("hero", "column", "split"):
+        assert f'[data-layout="{layout}"]' in css, layout
+    # split は左右2カラム
+    assert "grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr)" in css
+
+
+def test_winner_glow_only_after_the_final_state(client, db):
+    """1位の強調は最終確定後だけ(暫定表示中は光らせない)。"""
+    css = _reveal_css()
+    assert '.p-ranking[data-winner="true"] .p-rank-card[data-rank="1"]' in css
+
+    # 1位へglowを当てるruleは、必ず data-winner="true" のスコープ内にあること
+    for selector, block in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        if "--p-glow" not in block:
+            continue
+        if 'data-rank="1"' not in selector:
+            continue
+        assert 'data-winner="true"' in selector, selector.strip()
+
+    js = _presentation_js()
+    prepare = _function_body(js, "function prepareFinalRankingStage(")
+    assert 'rankingPanel.dataset.winner = "false"' in prepare
+
+
+def test_skip_produces_the_complete_final_ranking(client, db):
+    js = _presentation_js()
+    body = _function_body(js, "function showFinalRankingFinalState(")
+    assert "core.toRankGroups(" in body
+    assert 'rankingPanel.dataset.winner = "true"' in body
+    # 上位と下位を正しいコンテナへ振り分ける
+    assert "group.rank <= 3" in body
+
+
+def test_replay_and_revisit_reuse_the_same_final_layout(client, db):
+    """FINISHED再訪問 / replay でも同じレイアウトで完成形を出すこと。"""
+    js = _presentation_js()
+    body = _function_body(js, "function showRanking(summary) {")
+    assert "core.finalLayout(" in body
+    assert "showFinalRankingFinalState(summary)" in body
+    assert "renderRankingActions(summary)" in body

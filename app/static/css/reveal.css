@@ -565,3 +565,165 @@
   color: var(--p-gold-hi);
   text-shadow: var(--p-glow);
 }
+
+/* ---------------------------------------------------------------------------
+   13. Final Ranking (Phase 9D)
+   Subject数と同率の広がりで hero / column / split の3レイアウトを切り替える。
+   DOM構造は3種類とも共通で、ここでは並べ方だけを変える。
+   --------------------------------------------------------------------------- */
+.p-ranking__top,
+.p-ranking__rest {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * .8);
+  min-width: 0;
+}
+
+/* 4-6 Subject: 1列。上位も下位も同じ列に積む。 */
+.p-ranking[data-layout="column"] .p-ranking__grid,
+.p-ranking[data-layout="column"] #rankingList {
+  flex-direction: column;
+  max-width: calc(var(--u) * 68);
+}
+
+/* 1-3 Subject: 中央で大きく。 */
+.p-ranking[data-layout="hero"] .p-ranking__grid,
+.p-ranking[data-layout="hero"] #rankingList {
+  flex-direction: column;
+  max-width: calc(var(--u) * 56);
+}
+
+.p-ranking[data-layout="hero"] .p-rank-card {
+  padding: calc(var(--u) * 2.2) calc(var(--u) * 3);
+}
+
+.p-ranking[data-layout="hero"] .p-rank-card__score {
+  font-size: calc(var(--u) * 5.4);
+}
+
+/* 7 Subject以上: 左 TOP3 / 右 4位以下 */
+.p-ranking[data-layout="split"] .p-ranking__grid,
+.p-ranking[data-layout="split"] #rankingList {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: calc(var(--u) * 2.4);
+  align-items: start;
+  max-width: calc(var(--u) * 88);
+}
+
+.p-ranking[data-layout="split"] .p-ranking__rest .p-rank-card {
+  padding: calc(var(--u) * .7) calc(var(--u) * 1.4);
+}
+
+.p-ranking[data-layout="split"] .p-ranking__rest .p-rank-card__score {
+  font-size: calc(var(--u) * 2.1);
+}
+
+/* rank group カード。同率は1枚の中に横並びで入る。 */
+.p-rank-card {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 1.6);
+  padding: calc(var(--u) * 1.1) calc(var(--u) * 2);
+  border-radius: calc(var(--u) * .8);
+  border: 1px solid rgba(214, 179, 90, .16);
+  background: linear-gradient(180deg, var(--p-panel) 0%, var(--p-panel-deep) 100%);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .08);
+  transition:
+    transform var(--t-top-enter) cubic-bezier(.22, .61, .36, 1),
+    box-shadow var(--t-top-enter) ease-out,
+    border-color var(--t-top-enter) ease-out;
+}
+
+/* 下位の積み上げ。素早く出す。 */
+.p-rank-card[data-top="false"] {
+  animation: rankRowIn var(--t-quick-group) cubic-bezier(.22, .61, .36, 1) both;
+}
+
+/* 上位は大きく出してから slot へ収まる。 */
+.p-rank-card[data-top="true"][data-reveal="enter"] {
+  transform: scale(1.12);
+  border-color: var(--p-gold);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .3), var(--p-glow);
+  animation: topCardIn var(--t-top-enter) cubic-bezier(.22, .61, .36, 1) both;
+}
+
+.p-rank-card[data-top="true"][data-reveal="settled"] {
+  transform: scale(1);
+  border-color: var(--p-line);
+}
+
+@keyframes topCardIn {
+  from { opacity: 0; transform: scale(.8) translateY(calc(var(--u) * 2)); }
+  to { opacity: 1; transform: scale(1.12) translateY(0); }
+}
+
+/* 1位。最終確定後にだけ最大演出。 */
+.p-ranking[data-winner="true"] .p-rank-card[data-rank="1"] {
+  border-color: var(--p-gold);
+  background:
+    radial-gradient(ellipse 120% 180% at 0% 50%, rgba(125, 17, 27, .3) 0%, rgba(125, 17, 27, 0) 62%),
+    linear-gradient(180deg, var(--p-panel) 0%, var(--p-panel-deep) 100%);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .35), var(--p-glow-strong);
+}
+
+.p-ranking[data-winner="true"] .p-rank-card[data-rank="1"] .p-rank-card__score {
+  color: var(--p-gold-hi);
+}
+
+.p-rank-card__rank {
+  font-family: var(--p-serif);
+  font-size: calc(var(--u) * 2.2);
+  font-weight: 900;
+  color: var(--p-gold);
+  min-width: calc(var(--u) * 9);
+  white-space: nowrap;
+}
+
+.p-rank-card[data-rank="1"] .p-rank-card__rank {
+  font-size: calc(var(--u) * 2.8);
+}
+
+/* 同率は横並び。3件以上になったら縦に折り返して幅を守る。 */
+.p-rank-card__members {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * .5) calc(var(--u) * 2.4);
+}
+
+.p-rank-card[data-tied="true"] .p-rank-card__members {
+  flex-direction: row;
+}
+
+.p-rank-card__member {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--u) * 1.2);
+}
+
+.p-rank-card__name {
+  font-size: calc(var(--u) * 2);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.p-rank-card__score {
+  font-size: calc(var(--u) * 2.6);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--p-ivory);
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .p-ranking[data-layout="split"] .p-ranking__grid,
+  .p-ranking[data-layout="split"] #rankingList {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
