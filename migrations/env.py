@@ -1,9 +1,15 @@
 import logging
+from contextlib import contextmanager
 from logging.config import fileConfig
 
 from flask import current_app
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 
 from alembic import context
+
+from app.config import resolve_migration_url
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -16,6 +22,12 @@ logger = logging.getLogger('alembic.env')
 
 
 def get_engine():
+    """アプリ本体(runtime)が使うFlask-SQLAlchemyのengineを返す。
+
+    これは DATABASE_URL (本番ではNeon pooled) に紐づくengineであり、
+    migrationの接続先とは限らない。migration側は get_migration_url() /
+    migration_connectable() を使うこと。
+    """
     try:
         # this works with Flask-SQLAlchemy<3 and Alchemical
         return current_app.extensions['migrate'].db.get_engine()
@@ -24,12 +36,64 @@ def get_engine():
         return current_app.extensions['migrate'].db.engine
 
 
-def get_engine_url():
+def render_url(url) -> str:
+    """SQLAlchemyのURLオブジェクトを、password込みの文字列へ戻す。"""
     try:
-        return get_engine().url.render_as_string(hide_password=False).replace(
-            '%', '%%')
+        return url.render_as_string(hide_password=False)
     except AttributeError:
-        return str(get_engine().url).replace('%', '%%')
+        return str(url)
+
+
+def get_engine_url():
+    """runtime engineのURL(alembic.iniへ書き込むため '%' をescapeする)。"""
+    return render_url(get_engine().url).replace('%', '%%')
+
+
+def get_migration_url() -> str:
+    """schema migrationが接続すべきURLを返す。**online/offline共通の唯一の決定点**。
+
+    - MIGRATION_DATABASE_URL が設定されていればそれを使う
+      (本番ではNeonのdirect connection)。
+    - 未設定ならruntime engineのURL(=DATABASE_URL相当)へfallbackする。
+
+    値は create_app() の build_config() が既に normalize 済み
+    (postgres:// / postgresql:// → postgresql+psycopg://、query parameterは
+    そのまま保持)なので、ここでURLを再加工しない。
+    """
+    return resolve_migration_url(
+        current_app.config, render_url(get_engine().url)
+    )
+
+
+@contextmanager
+def migration_connectable():
+    """migrationを実行するconnectableを供給するcontext manager。
+
+    MIGRATION_DATABASE_URL が runtime engine と別の接続先を指している場合
+    (本番: runtime=pooled / migration=direct)のみ、そのURL専用のengineを
+    一時的に生成する。DDLを1回流すだけなので NullPool を使い、抜けるときに
+    必ず dispose() する。
+
+    接続先が同一の場合(MIGRATION_DATABASE_URL未設定、SQLiteでの開発、
+    テスト等)は、engineを増やさずruntime engineをそのまま使う。この場合は
+    アプリ本体のconnection poolなので **dispose()してはならない**。
+    """
+    runtime_engine = get_engine()
+    migration_url = get_migration_url()
+
+    if render_url(make_url(migration_url)) == render_url(runtime_engine.url):
+        yield runtime_engine
+        return
+
+    logger.info(
+        'Using dedicated migration engine from MIGRATION_DATABASE_URL '
+        '(runtime DATABASE_URL is left untouched).'
+    )
+    migration_engine = create_engine(migration_url, poolclass=NullPool)
+    try:
+        yield migration_engine
+    finally:
+        migration_engine.dispose()
 
 
 # add your model's MetaData object here
@@ -40,11 +104,7 @@ def get_engine_url():
 # schema migrationには常にNeonのdirect connection(MIGRATION_DATABASE_URL)を
 # 使う。設定されていなければ(ローカルSQLite開発時など)DATABASE_URL相当の
 # runtime engine URLにフォールバックする(実装計画 v2 17節)。
-_migration_url = current_app.config.get("MIGRATION_DATABASE_URL")
-config.set_main_option(
-    'sqlalchemy.url',
-    _migration_url.replace('%', '%%') if _migration_url else get_engine_url(),
-)
+config.set_main_option('sqlalchemy.url', get_migration_url().replace('%', '%%'))
 target_db = current_app.extensions['migrate'].db
 
 # other values from the config, defined by the needs of env.py,
@@ -102,17 +162,20 @@ def run_migrations_online():
     if conf_args.get("process_revision_directives") is None:
         conf_args["process_revision_directives"] = process_revision_directives
 
-    connectable = get_engine()
+    # Flask-Migrateの既定テンプレートはここで get_engine() を使うため、
+    # sqlalchemy.url に入れた MIGRATION_DATABASE_URL が online modeでは
+    # 無視され、DATABASE_URL(pooled)へ接続してしまっていた。
+    # online/offlineで同じ決定ロジックを通すため connectable を差し替える。
+    with migration_connectable() as connectable:
+        with connectable.connect() as connection:
+            context.configure(
+                connection=connection,
+                target_metadata=get_metadata(),
+                **conf_args
+            )
 
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=get_metadata(),
-            **conf_args
-        )
-
-        with context.begin_transaction():
-            context.run_migrations()
+            with context.begin_transaction():
+                context.run_migrations()
 
 
 if context.is_offline_mode():

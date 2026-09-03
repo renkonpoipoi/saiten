@@ -38,6 +38,27 @@ def normalize_pg_url(url: str) -> str:
     return url
 
 
+def resolve_migration_url(config: dict, runtime_url: str) -> str:
+    """schema migrationが接続すべきURLを決める。
+
+    online / offline のどちらのmigrationからも必ずこの関数を通すことで、
+    「offlineだけ MIGRATION_DATABASE_URL が効いて online は DATABASE_URL
+    (本番ではpooled) へ接続してしまう」という不整合を構造的に防ぐ。
+
+    - `config["MIGRATION_DATABASE_URL"]` があればそれを使う
+      (本番ではNeonのdirect connection)。
+    - 無ければ runtime_url (= DATABASE_URL 相当) へfallbackする。
+
+    値は build_config() が normalize 済み(postgres:// →
+    postgresql+psycopg://、query parameterは保持)なので、
+    ここではURLを一切加工しない。
+
+    :param config: Flaskのapp.config相当のマッピング
+    :param runtime_url: fallback先(アプリ本体のengineのURL)
+    """
+    return config.get("MIGRATION_DATABASE_URL") or runtime_url
+
+
 def _require(source: dict, name: str, *, context: str = "") -> str:
     value = source.get(name)
     if not value:
