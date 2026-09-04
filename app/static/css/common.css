@@ -58,6 +58,22 @@ h1, h2, h3 { margin: 0 0 12px; }
 }
 .field textarea { resize: vertical; min-height: 80px; }
 
+/* selectは他のフォーム部品と同じ見た目にする。ここを指定しないと、
+   body から継承した明るい文字色に対して背景がUA既定のままになり、
+   ダークテーマ上で選択肢が読めない(=操作不能に見える)。 */
+select {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #10131a;
+  color: var(--text);
+  font-size: 1rem;
+  min-width: 12ch;
+  max-width: 100%;
+}
+select:disabled { opacity: .5; cursor: not-allowed; }
+select option { background: #10131a; color: var(--text); }
+
 .repeatable-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 .repeatable-row { display: flex; gap: 8px; }
 .repeatable-row input { flex: 1; }

@@ -141,51 +141,19 @@
   // ---------------------------------------------------------------------------
   // ホスト兼任の採点者が自分の採点画面へ入る導線
   //
-  // Host CodeもScorer CodeもURLに載せない。平文コードをclientが持たないので
+  // 遷移そのものは通常のHTML form (POST + target="_blank") が行う。JSは
+  // 「ホスト兼任がいるときだけformを出す」以外は何もしない。
+  //
+  // Host CodeもScorer CodeもURLに載らない。平文コードをclientが持たないので
   // localStorage等へ保存する余地もない。対象Scorerはサーバーが
   // project_id + is_host_scorer から決める(clientはidを送らない)。
   // ---------------------------------------------------------------------------
 
-  const HOST_SCORING_BLOCKED_MESSAGE =
-    "新しいタブを開けませんでした。ブラウザのポップアップブロックを解除してから、もう一度お試しください。";
-
   function renderHostScoringLink(data) {
-    const button = document.getElementById("openHostScoringButton");
+    const form = document.getElementById("openHostScoringForm");
     const hasHostScorer = (data.scorers || []).some((scorer) => scorer.is_host_scorer);
-    button.classList.toggle("hidden", !hasHostScorer);
+    form.classList.toggle("hidden", !hasHostScorer);
   }
-
-  document.getElementById("openHostScoringButton").addEventListener("click", async () => {
-    // タブはclick gesture内で同期的に確保する(await後のwindow.openは
-    // ポップアップブロックの対象になりやすいため)。
-    // noopener付きのwindow.openはnullを返す実装があり、その場合こちらから
-    // location を書き換えられないので、ここではnoopenerを付けずに開き、
-    // 取得したWindowProxyのopenerを明示的に切る。
-    const tab = window.open("about:blank", "_blank");
-
-    // ブロックされた/参照が取れない場合は、サーバー側のscorer sessionを
-    // 切り替えないまま通常のエラー表示で終える(不用意な状態変更をしない)。
-    if (!tab) {
-      showMessage(HOST_SCORING_BLOCKED_MESSAGE, { isError: true });
-      return;
-    }
-    try {
-      tab.opener = null;
-    } catch (err) {
-      /* opener を切れない環境でも続行する */
-    }
-
-    try {
-      await apiFetch(`/api/projects/${projectId}/host-scorer-session`, {
-        method: "POST",
-      });
-    } catch (err) {
-      tab.close();
-      showMessage(err.message, { isError: true });
-      return;
-    }
-    tab.location = "/scorer";
-  });
 
   const SUBJECT_STATUS_LABELS = {
     WAITING: "待機中",

@@ -24,11 +24,11 @@
     const badge = document.getElementById("projectStatusBadge");
     badge.textContent = project.status;
 
+    // Host Dashboardへ戻る導線は状態に関係なく常に出す。単なるGET遷移で、
+    // 保存も状態遷移も伴わない(「採点を開始する」とは独立している)。
     const dashboardLink = document.getElementById("hostDashboardLink");
-    if (!isDraft) {
-      dashboardLink.href = `/host/${projectId}`;
-      dashboardLink.classList.remove("hidden");
-    }
+    dashboardLink.href = `/host/${projectId}`;
+    dashboardLink.classList.remove("hidden");
 
     document.getElementById("draftOnlyNotice").classList.toggle("hidden", isDraft);
     document.getElementById("projectNameInput").value = project.name;
@@ -133,12 +133,21 @@
 
   // ホスト兼任の採点者。付け替えはフラグの移動だけで、採点者の追加・削除は
   // 一切行わない(旧方式で作られた「ホスト」という名前のScorerも自動削除しない)。
+  //
+  // **DRAFTである限り、ホスト兼任が今いるかどうかに関係なく常に操作可能にする。**
+  // allow_host_scoring が false だからdisabledにする、という設計にはしない。
+  // これをやると、ホスト兼任のScorerを削除した直後に誰も再割当できなくなる。
   function renderHostScorer(isDraft) {
     const section = document.getElementById("hostScorerSection");
     section.classList.toggle("hidden", !isDraft);
-    if (!isDraft) return;
 
     const select = document.getElementById("hostScorerSelect");
+    const saveButton = document.getElementById("saveHostScorerButton");
+    // DRAFT以外では編集させない(構成変更はDRAFT限定という既存の制約)。
+    select.disabled = !isDraft;
+    saveButton.disabled = !isDraft;
+    if (!isDraft) return;
+
     select.innerHTML = "";
 
     const none = document.createElement("option");
@@ -146,13 +155,21 @@
     none.textContent = "(なし)";
     select.appendChild(none);
 
-    project.scorers.forEach((scorer) => {
+    // 選択肢は現在activeな採点者だけ。削除済みの採点者は当然出てこない。
+    const candidates = project.scorers.filter((scorer) => scorer.is_active);
+    candidates.forEach((scorer) => {
       const option = document.createElement("option");
       option.value = String(scorer.id);
       option.textContent = scorer.display_name;
       if (scorer.is_host_scorer) option.selected = true;
       select.appendChild(option);
     });
+
+    // 採点者が1人もいないときだけは選びようがないので、その旨を出す。
+    const empty = candidates.length === 0;
+    select.disabled = empty;
+    saveButton.disabled = empty;
+    document.getElementById("hostScorerEmptyNote").classList.toggle("hidden", !empty);
   }
 
   document.getElementById("saveHostScorerButton").addEventListener("click", async () => {

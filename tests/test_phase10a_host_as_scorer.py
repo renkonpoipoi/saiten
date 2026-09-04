@@ -683,26 +683,44 @@ def test_creation_under_the_index_flags_only_one_scorer(client, db):
 
 
 # ---------------------------------------------------------------------------
-# Phase 10A-4: Host本人がコード入力なしで自分の採点画面へ入る
+# Phase 10A-4 / 10A-6: Host本人がコード入力なしで自分の採点画面へ入る
+#
+# 遷移は通常のHTML form (POST + target="_blank") から
+# POST /host/<id>/scoring が行い、303 で /scorer へ redirect する。
+# about:blank を開いて JS から WindowProxy.location を書き換える方式は
+# Phase 10A-6 で廃止した(opener を切ると実ブラウザで遷移が通らない)。
 # ---------------------------------------------------------------------------
 
 
 def _open_host_scoring(client, project_id):
-    return client.post(f"/api/projects/{project_id}/host-scorer-session")
+    return client.post(f"/host/{project_id}/scoring")
 
 
-def test_host_can_open_their_own_scorer_session(client, db):
+def test_host_scoring_entry_redirects_to_the_scorer_dashboard(client, db):
     created = _create(client, allow_host_scoring=True, host_scorer_index=2)
     project_id = created["project_id"]
     host = _host_scorers(project_id)[0]
 
     resp = _open_host_scoring(client, project_id)
-    assert resp.status_code == 200
-    assert resp.get_json() == {"scorer_id": host.id, "display_name": "佐藤"}
+    # 303: POSTの結果をGETで取りに行かせる(再読み込みでPOSTが再送されない)
+    assert resp.status_code == 303
+    assert resp.headers["Location"].endswith("/scorer")
 
     with client.session_transaction() as sess:
         assert sess["scorer_id"] == host.id
         assert sess["scorer_project_id"] == project_id
+
+
+def test_host_scoring_entry_lands_on_a_usable_scorer_dashboard(client, db):
+    """redirect先を実際にたどって、採点画面が表示できること。"""
+    created = _create(client, subjects=["A"], allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    start_scoring(client, project_id)
+
+    resp = client.post(f"/host/{project_id}/scoring", follow_redirects=True)
+    assert resp.status_code == 200
+    assert 'id="scoringPanel"' in resp.get_data(as_text=True)
+    assert client.get("/api/scorer/me/evaluations").status_code == 200
 
 
 def test_host_and_scorer_sessions_coexist(client, db):
@@ -711,7 +729,7 @@ def test_host_and_scorer_sessions_coexist(client, db):
     project_id = created["project_id"]
     start_scoring(client, project_id)
 
-    assert _open_host_scoring(client, project_id).status_code == 200
+    assert _open_host_scoring(client, project_id).status_code == 303
 
     with client.session_transaction() as sess:
         # 別keyなので共存する。Host権限は破棄されない。
@@ -721,9 +739,11 @@ def test_host_and_scorer_sessions_coexist(client, db):
     # 両方のAPIが同時に使える
     assert client.get(f"/api/projects/{project_id}/progress").status_code == 200
     assert client.get("/api/scorer/me/evaluations").status_code == 200
+    # 元タブのHost Dashboardもそのまま開ける
+    assert client.get(f"/host/{project_id}").status_code == 200
 
 
-def test_host_scorer_session_never_takes_a_client_supplied_id(client, app, db):
+def test_host_scoring_entry_never_takes_a_client_supplied_id(client, app, db):
     """clientがscorer_idを送っても無視する(なりすまし経路を作らない)。"""
     created = _create(client, allow_host_scoring=True, host_scorer_index=0)
     project_id = created["project_id"]
@@ -731,27 +751,35 @@ def test_host_scorer_session_never_takes_a_client_supplied_id(client, app, db):
     host, victim = rows[0], rows[2]
 
     resp = client.post(
-        f"/api/projects/{project_id}/host-scorer-session",
-        json={"scorer_id": victim.id, "display_name": "佐藤"},
+        f"/host/{project_id}/scoring",
+        data={"scorer_id": str(victim.id), "display_name": "佐藤"},
     )
-    assert resp.status_code == 200
-    assert resp.get_json()["scorer_id"] == host.id
+    assert resp.status_code == 303
     with client.session_transaction() as sess:
         assert sess["scorer_id"] == host.id
 
 
-def test_host_scorer_session_requires_a_host_session(client, app, db):
+def test_host_scoring_entry_is_post_only(client, db):
+    """★ GETでsessionを書き換えない(プリフェッチ等で差し替わらない)。"""
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+
+    resp = client.get(f"/host/{project_id}/scoring")
+    assert resp.status_code == 405
+    with client.session_transaction() as sess:
+        assert "scorer_id" not in sess
+
+
+def test_host_scoring_entry_requires_a_host_session(client, app, db):
     created = _create(client, allow_host_scoring=True, host_scorer_index=0)
     anonymous = app.test_client()
-    resp = anonymous.post(
-        f"/api/projects/{created['project_id']}/host-scorer-session"
-    )
+    resp = anonymous.post(f"/host/{created['project_id']}/scoring")
     assert resp.status_code == 403
     with anonymous.session_transaction() as sess:
         assert "scorer_id" not in sess
 
 
-def test_host_scorer_session_rejects_another_projects_host(client, app, db):
+def test_host_scoring_entry_rejects_another_projects_host(client, app, db):
     other_client = app.test_client()
     theirs = _create(other_client, name="他人の", allow_host_scoring=True, host_scorer_index=0)
 
@@ -759,12 +787,11 @@ def test_host_scorer_session_rejects_another_projects_host(client, app, db):
     resp = _open_host_scoring(client, theirs["project_id"])
     assert resp.status_code == 403
     with client.session_transaction() as sess:
-        # 他人のScorerになっていない
         assert "scorer_id" not in sess
     assert mine["project_id"] != theirs["project_id"]
 
 
-def test_host_scorer_session_409s_without_a_host_scorer(client, db):
+def test_host_scoring_entry_409s_without_a_host_scorer(client, db):
     created = _create(client, allow_host_scoring=False)
     resp = _open_host_scoring(client, created["project_id"])
     assert resp.status_code == 409
@@ -772,17 +799,35 @@ def test_host_scorer_session_409s_without_a_host_scorer(client, db):
         assert "scorer_id" not in sess
 
 
-def test_host_scorer_session_follows_a_reassignment(client, db):
+def test_host_scoring_entry_ignores_inactive_host_scorers(client, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    host = _host_scorers(project_id)[0]
+    host.is_active = False
+    db.session.commit()
+
+    resp = _open_host_scoring(client, project_id)
+    assert resp.status_code == 409
+    with client.session_transaction() as sess:
+        assert "scorer_id" not in sess
+
+
+def test_host_scoring_entry_follows_a_reassignment(client, db):
     created = _create(client, allow_host_scoring=True, host_scorer_index=0)
     project_id = created["project_id"]
     rows = _scorers(project_id)
 
-    assert _open_host_scoring(client, project_id).get_json()["scorer_id"] == rows[0].id
+    _open_host_scoring(client, project_id)
+    with client.session_transaction() as sess:
+        assert sess["scorer_id"] == rows[0].id
+
     _patch_host_scorer(client, project_id, rows[3].id)
-    assert _open_host_scoring(client, project_id).get_json()["scorer_id"] == rows[3].id
+    _open_host_scoring(client, project_id)
+    with client.session_transaction() as sess:
+        assert sess["scorer_id"] == rows[3].id
 
 
-def test_host_scorer_session_never_grants_host_rights_to_a_scorer(client, app, db):
+def test_host_scoring_entry_never_grants_host_rights_to_a_scorer(client, app, db):
     """逆方向(Scorer -> Host)の経路は作らない。"""
     from tests.helpers import login_scorer
 
@@ -796,17 +841,52 @@ def test_host_scorer_session_never_grants_host_rights_to_a_scorer(client, app, d
     assert scorer.get(f"/api/projects/{project_id}/progress").status_code == 403
 
 
-def test_host_scorer_session_puts_no_credentials_in_the_url(client, db):
+def test_host_scoring_entry_puts_no_credentials_in_the_url_or_body(client, db):
     """URLにもレスポンスにも平文コードを載せない。"""
     created = _create(client, allow_host_scoring=True, host_scorer_index=0)
     project_id = created["project_id"]
     resp = _open_host_scoring(client, project_id)
 
     body = resp.get_data(as_text=True)
-    assert created["host_code"] not in body
+    location = resp.headers["Location"]
+    assert created["host_code"] not in body and created["host_code"] not in location
     for scorer in created["scorers"]:
         assert scorer["code"] not in body
-    assert "code" not in resp.get_json()
+        assert scorer["code"] not in location
+    # redirect先は素の /scorer で、識別子を含まない
+    assert location.endswith("/scorer")
+
+
+def test_host_scoring_entry_is_csrf_protected(client_with_security, app_with_security):
+    """CSRF有効時、tokenの無いPOSTは拒否され、sessionも書き換わらない。"""
+    with app_with_security.app_context():
+        from app.extensions import db as _db
+        from app.models import Project, Scorer
+        from app.services.code_service import generate_scorer_code, hash_code
+
+        project = Project(
+            name="csrf", status="DRAFT",
+            host_code_hash=hash_code("host_csrf"), allow_host_scoring=True,
+        )
+        _db.session.add(project)
+        _db.session.flush()
+        _db.session.add(
+            Scorer(
+                project_id=project.id, display_name="吉田",
+                access_code_hash=hash_code(generate_scorer_code()),
+                is_host_scorer=True,
+            )
+        )
+        _db.session.commit()
+        project_id = project.id
+
+    with client_with_security.session_transaction() as sess:
+        sess["host_project_id"] = project_id
+
+    resp = client_with_security.post(f"/host/{project_id}/scoring")
+    assert resp.status_code == 400
+    with client_with_security.session_transaction() as sess:
+        assert "scorer_id" not in sess
 
 
 # --- client 側の実装契約 (静的検査) ---------------------------------------
@@ -816,37 +896,53 @@ def _dashboard_js() -> str:
     return (JS_DIR / "host_dashboard.js").read_text(encoding="utf-8")
 
 
-def test_dashboard_opens_the_tab_before_the_request():
-    """click gesture内で同期的にタブを確保してからPOSTすること。"""
-    js = _dashboard_js()
-    handler = js[js.index('getElementById("openHostScoringButton")'):]
-    handler = handler[: handler.index("\n  });")]
-
-    assert handler.index("window.open(") < handler.index("await apiFetch(")
-    assert 'tab.location = "/scorer"' in handler
-    assert handler.index("await apiFetch(") < handler.index('tab.location = "/scorer"')
-
-
-def test_dashboard_handles_a_blocked_popup_without_switching_sessions():
-    """★ window.open が null を返したらPOSTせずエラー表示だけで終える。"""
-    js = _dashboard_js()
-    handler = js[js.index('getElementById("openHostScoringButton")'):]
-    handler = handler[: handler.index("\n  });")]
-
-    guard = handler.index("if (!tab)")
-    request = handler.index("await apiFetch(")
-    assert guard < request, "null チェックがPOSTより後にある"
-
-    blocked = handler[guard: handler.index("\n    }", guard)]
-    assert "showMessage(" in blocked
-    assert "return;" in blocked
-    # ブロック時にサーバー側のsessionを触らない
-    assert "apiFetch" not in blocked
-
-
 def _strip_js_comments(source: str) -> str:
     without_block = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
     return re.sub(r"^\s*//.*$", "", without_block, flags=re.M)
+
+
+def test_dashboard_uses_a_plain_form_post(client, db):
+    """★ 遷移は通常のHTML formが行う(JSはWindowProxyを触らない)。"""
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    html = client.get(f"/host/{created['project_id']}").get_data(as_text=True)
+
+    form = re.search(r'<form id="openHostScoringForm".*?</form>', html, re.S)
+    assert form, "openHostScoringForm が見つからない"
+    body = form.group(0)
+    assert 'method="post"' in body
+    assert 'target="_blank"' in body
+    assert f'action="/host/{created["project_id"]}/scoring"' in body
+    assert 'name="csrf_token"' in body
+    assert 'type="submit"' in body
+    assert 'id="openHostScoringButton"' in body
+
+
+def test_dashboard_no_longer_opens_a_blank_tab_from_js():
+    """★ about:blank + WindowProxy 操作のロジックが残っていないこと。"""
+    js = _dashboard_js()
+    for removed in (
+        "window.open",
+        "about:blank",
+        "tab.location",
+        "tab.opener",
+        "tab.close",
+        "host-scorer-session",
+    ):
+        assert removed not in js, removed
+
+
+def test_host_scorer_session_json_endpoint_is_gone():
+    """経路を1本に絞る(旧JSON endpointは撤去)。"""
+    source = (
+        Path(__file__).resolve().parent.parent / "app" / "routes" / "api_projects.py"
+    ).read_text(encoding="utf-8")
+    assert "host-scorer-session" not in source
+
+    from app import create_app
+
+    app = create_app({"APP_ENV": "testing", "SECRET_KEY": "x"})
+    rules = {rule.rule for rule in app.url_map.iter_rules()}
+    assert not any("host-scorer-session" in rule for rule in rules)
 
 
 def test_dashboard_never_puts_codes_in_the_url_or_storage():
@@ -858,29 +954,17 @@ def test_dashboard_never_puts_codes_in_the_url_or_storage():
     assert "scorer_id" not in js, "clientからscorer_idを送らない"
 
 
-def test_dashboard_detaches_the_opener():
-    js = _dashboard_js()
-    assert "tab.opener = null" in js
-
-
-def test_dashboard_closes_the_tab_when_the_request_fails():
-    js = _dashboard_js()
-    handler = js[js.index('getElementById("openHostScoringButton")'):]
-    handler = handler[: handler.index("\n  });")]
-    catch_block = handler[handler.index("} catch (err)"):]
-    assert "tab.close()" in catch_block
-    assert "showMessage(" in catch_block
-
-
-def test_dashboard_button_only_shows_with_a_host_scorer(client, db):
+def test_dashboard_form_only_shows_with_a_host_scorer(client, db):
     js = _dashboard_js()
     body = js[js.index("function renderHostScoringLink("):]
     body = body[: body.index("\n  }")]
     assert "scorer.is_host_scorer" in body
-    assert "classList.toggle(\"hidden\"" in body
+    assert 'classList.toggle("hidden"' in body
+    # JSがやるのは表示制御だけ
+    assert "apiFetch" not in body
 
     html = client.get(f"/host/{_create(client)['project_id']}").get_data(as_text=True)
-    assert 'id="openHostScoringButton"' in html
+    assert 'id="openHostScoringForm"' in html
 
 
 def test_phase10a_adds_no_session_architecture_change():
@@ -889,3 +973,174 @@ def test_phase10a_adds_no_session_architecture_change():
         source = (Path(__file__).resolve().parent.parent / path).read_text(encoding="utf-8")
         assert "scorer_sessions" not in source
         assert "SESSION_COOKIE_NAME" not in source
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A-6: Host Settings の「ホスト兼任の採点者」select
+#
+# DRAFTである限り、ホスト兼任が今いるかどうかに関係なく常に操作可能にする。
+# allow_host_scoring が false だから disabled にする、という設計にはしない
+# (ホスト兼任のScorerを削除した直後に誰も再割当できなくなるため)。
+# ---------------------------------------------------------------------------
+
+
+def _settings_js() -> str:
+    return (JS_DIR / "host_settings.js").read_text(encoding="utf-8")
+
+
+def _render_host_scorer_body() -> str:
+    js = _settings_js()
+    body = js[js.index("function renderHostScorer(isDraft) {"):]
+    return body[: body.index("\n  }")]
+
+
+def test_settings_select_is_never_disabled_by_allow_host_scoring():
+    """★ allow_host_scoring を理由に disabled にしていないこと。"""
+    body = _render_host_scorer_body()
+    assert "allow_host_scoring" not in body
+    # disabled の根拠は DRAFT かどうかと、候補が0人かどうかだけ
+    assert "select.disabled = !isDraft" in body
+    assert "select.disabled = empty" in body
+
+
+def test_settings_select_lists_only_active_scorers():
+    body = _render_host_scorer_body()
+    assert "filter((scorer) => scorer.is_active)" in body
+    assert '"(なし)"' in body
+
+
+def test_settings_select_exists_in_the_template(client, db):
+    created = _create(client, allow_host_scoring=False)
+    html = client.get(f"/host/{created['project_id']}/settings").get_data(as_text=True)
+    for element_id in (
+        "hostScorerSection",
+        "hostScorerSelect",
+        "saveHostScorerButton",
+        "hostScorerEmptyNote",
+    ):
+        assert f'id="{element_id}"' in html, element_id
+    # テンプレート側で disabled を固定していない
+    tag = re.search(r'<select id="hostScorerSelect"[^>]*>', html)
+    assert tag and "disabled" not in tag.group(0)
+
+
+def test_deleting_the_host_scorer_leaves_a_reassignable_state(client, db):
+    """★ 田中(兼任)を削除 → なし → 吉田へ再割当できる、の一連。"""
+    created = create_project(
+        client, scorers=["吉田", "田中"], allow_host_scoring=True, host_scorer_index=1
+    )
+    project_id = created["project_id"]
+    tanaka = _host_scorers(project_id)[0]
+    assert tanaka.display_name == "田中"
+
+    # 1) 兼任者を削除する
+    assert client.delete(
+        f"/api/projects/{project_id}/scorers/{tanaka.id}"
+    ).status_code == 204
+
+    detail = client.get(f"/api/projects/{project_id}").get_json()
+    assert detail["status"] == "DRAFT"
+    assert detail["allow_host_scoring"] is False
+    # 2) 候補として残るのは吉田だけ。削除済みの田中は出てこない。
+    candidates = [s for s in detail["scorers"] if s["is_active"]]
+    assert [s["display_name"] for s in candidates] == ["吉田"]
+    assert all(not s["is_host_scorer"] for s in detail["scorers"])
+
+    # 3) 吉田へ再割当できる
+    yoshida = candidates[0]
+    assert _patch_host_scorer(client, project_id, yoshida["id"]).status_code == 200
+    detail = client.get(f"/api/projects/{project_id}").get_json()
+    assert detail["allow_host_scoring"] is True
+    assert [(s["display_name"], s["is_host_scorer"]) for s in detail["scorers"]] == [
+        ("吉田", True)
+    ]
+
+    # 4) 解除して「なし」へ戻せる
+    assert _patch_host_scorer(client, project_id, None).status_code == 200
+    detail = client.get(f"/api/projects/{project_id}").get_json()
+    assert detail["allow_host_scoring"] is False
+    assert all(not s["is_host_scorer"] for s in detail["scorers"])
+
+
+def test_reassignment_is_still_draft_only(client, db):
+    """DRAFT以外では変更できないという既存制約は維持する。"""
+    created = _create(client, allow_host_scoring=False)
+    project_id = created["project_id"]
+    start_scoring(client, project_id)
+
+    target = _scorers(project_id)[0]
+    assert _patch_host_scorer(client, project_id, target.id).status_code == 409
+
+    body = _render_host_scorer_body()
+    assert "select.disabled = !isDraft" in body
+    assert "saveButton.disabled = !isDraft" in body
+
+
+def test_settings_select_is_styled_for_the_dark_theme():
+    """selectに明示的なstyleが無いと、暗い背景で選択肢が読めなくなる。"""
+    css = (APP_DIR / "static" / "css" / "common.css").read_text(encoding="utf-8")
+    assert re.search(r"^select \{", css, re.M), "select のスタイルが無い"
+    block = css[css.index("select {"):]
+    block = block[: block.index("}")]
+    assert "background:" in block
+    assert "color:" in block
+    assert "select option" in css
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A-6: Host Settings → Host Dashboard の戻る導線
+# ---------------------------------------------------------------------------
+
+
+def test_settings_has_a_back_link_to_the_dashboard(client, db):
+    created = _create(client, allow_host_scoring=False)
+    html = client.get(f"/host/{created['project_id']}/settings").get_data(as_text=True)
+
+    tag = re.search(r'<a[^>]*id="hostDashboardLink"[^>]*>(.*?)</a>', html, re.S)
+    assert tag, "hostDashboardLink が見つからない"
+    assert "ホストダッシュボードに戻る" in tag.group(1)
+
+
+def test_back_link_is_always_shown_even_while_draft(client, db):
+    """★ DRAFT中こそ必要な導線なので、状態に関係なく常に出す。"""
+    js = _settings_js()
+    body = js[js.index("function render() {"):]
+    body = body[: body.index("\n  }")]
+
+    assert 'dashboardLink.href = `/host/${projectId}`' in body
+    assert 'dashboardLink.classList.remove("hidden")' in body
+    # 「DRAFTのときは出さない」という分岐が残っていないこと
+    link_part = body[body.index("const dashboardLink"):]
+    link_part = link_part[: link_part.index("draftOnlyNotice")]
+    assert "isDraft" not in link_part
+
+
+def test_back_link_is_a_plain_get_navigation(client, db):
+    """状態遷移も保存もしない、素のGET遷移であること。"""
+    js = _settings_js()
+    body = js[js.index("function render() {"):]
+    body = body[: body.index("\n  }")]
+    link_part = body[body.index("const dashboardLink"):]
+    link_part = link_part[: link_part.index("draftOnlyNotice")]
+
+    for token in ("apiFetch", "method:", "transition", "addEventListener"):
+        assert token not in link_part, token
+
+    created = _create(client, allow_host_scoring=False)
+    project_id = created["project_id"]
+    # 遷移先は実在するルートで、開いても状態は変わらない
+    assert client.get(f"/host/{project_id}").status_code == 200
+    assert client.get(f"/api/projects/{project_id}").get_json()["status"] == "DRAFT"
+
+
+def test_back_link_is_independent_from_start_scoring(client, db):
+    """「採点を開始する」とは別物であること(DRAFT→SCORINGを伴わない)。"""
+    created = _create(client, allow_host_scoring=False)
+    html = client.get(f"/host/{created['project_id']}/settings").get_data(as_text=True)
+
+    back = re.search(r'<a[^>]*id="hostDashboardLink"[^>]*>.*?</a>', html, re.S).group(0)
+    assert "startScoringButton" not in back
+    assert 'id="startScoringButton"' in html  # 開始ボタン自体は残っている
+
+    # 戻る導線はページ上部(開始ボタンより前)にある
+    assert html.index('id="hostDashboardLink"') < html.index('id="startScoringButton"')

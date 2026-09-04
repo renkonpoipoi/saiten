@@ -5,7 +5,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request, session
 
 from app.auth.decorators import require_host
-from app.errors import ConflictError, NotFoundError, ValidationError
+from app.errors import NotFoundError, ValidationError
 from app.extensions import db, limiter
 from app.models import Criterion, Project, Scorer, Subject
 from app.services import project_service
@@ -183,42 +183,6 @@ def delete_scorer(project_id: int, scorer_id: int):
     scorer = _get_scorer_or_404(scorer_id)
     project_service.delete_scorer(project, scorer)
     return "", 204
-
-
-@api_projects_bp.post("/projects/<int:project_id>/host-scorer-session")
-@require_host
-def open_host_scorer_session(project_id: int):
-    """Host本人が、コード入力なしに自分の採点画面へ入れるようにする。
-
-    対象のScorerは **サーバー側が project_id + is_host_scorer から決める。**
-    clientからscorer_idを受け取らないので、この経路で他のScorerへ
-    なりすますことはできない。
-
-    権限昇格にもならない: 呼び出しにはそのProjectのHost session
-    (=host codeを知っていること) が必要で、付与されるのはHost自身が
-    作成時に指定したScorerの権限だけ。そのScorerの平文コードはHostが
-    作成時に一度受け取っている。
-
-    Host sessionは破棄しない。session["host_project_id"] と
-    session["scorer_id"] は別keyなので、元タブのHost Dashboardは
-    そのまま使い続けられる。
-    """
-    project = _get_project_or_404(project_id)
-    scorer = (
-        Scorer.query.filter_by(
-            project_id=project.id, is_host_scorer=True, is_active=True
-        )
-        .order_by(Scorer.id)
-        .first()
-    )
-    if scorer is None:
-        raise ConflictError(
-            "This project has no host scorer. Assign one in the project settings."
-        )
-
-    session["scorer_id"] = scorer.id
-    session["scorer_project_id"] = scorer.project_id
-    return jsonify({"scorer_id": scorer.id, "display_name": scorer.display_name})
 
 
 @api_projects_bp.patch("/projects/<int:project_id>/host-scorer")

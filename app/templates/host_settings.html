@@ -2,10 +2,13 @@
 {% block title %}Host Settings - M1風採点アプリ{% endblock %}
 {% block content %}
 <div class="eyebrow">Host Settings</div>
+
+{# 状態を変えずにDashboardへ戻るための導線。単なるGET遷移で、保存も
+   状態遷移も行わない(「採点を開始する」とは完全に独立している)。 #}
+<p><a href="#" id="hostDashboardLink" class="hidden">&larr; ホストダッシュボードに戻る</a></p>
+
 <h1 id="projectNameHeading">プロジェクト設定</h1>
-<p>状態: <span id="projectStatusBadge" class="badge">-</span>
-  <a href="#" id="hostDashboardLink" class="hidden">Host Dashboardへ</a>
-</p>
+<p>状態: <span id="projectStatusBadge" class="badge">-</span></p>
 
 <section class="panel" id="draftOnlyNotice">
   <p style="color:var(--muted)">DRAFT状態の間のみ、プロジェクト構成(名前・被採点者・採点者・採点軸名)を編集できます。採点開始後は変更できません。</p>
@@ -55,6 +58,9 @@
       <select id="hostScorerSelect"></select>
       <button type="button" id="saveHostScorerButton">保存</button>
     </div>
+    <p id="hostScorerEmptyNote" class="hidden" style="color:var(--muted); font-size:.85rem;">
+      採点者がまだ登録されていません。先に採点者を追加してください。
+    </p>
   </div>
 </section>
 

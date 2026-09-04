@@ -10,10 +10,21 @@
 </p>
 
 {# ホスト兼任の採点者がいるときだけ表示する。コードを入力せず、Host sessionを
-   根拠にサーバー側が対象Scorerを決めて別タブで採点画面を開く。 #}
-<p>
-  <button type="button" id="openHostScoringButton" class="hidden">採点画面を開く ↗</button>
-</p>
+   根拠にサーバー側が対象Scorerを決めて別タブで採点画面を開く。
+
+   通常のHTML formのPOST + target="_blank" にしてある。about:blankを開いて
+   JSからWindowProxy.locationを書き換える方式は、openerを切った時点で
+   ブラウザが遷移を許さずタブが真っ白なまま残ることがあるため使わない。
+   session設定とredirectはサーバー側で完結する。 #}
+<form id="openHostScoringForm"
+      class="hidden"
+      method="post"
+      target="_blank"
+      rel="noopener"
+      action="{{ url_for('pages.host_scoring_entry', project_id=project_id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" id="openHostScoringButton">採点画面を開く ↗</button>
+</form>
 
 <div id="draftNotice" class="panel hidden" style="border-color:var(--gold);">
   <h2>まだ採点は始まっていません(DRAFT)</h2>
