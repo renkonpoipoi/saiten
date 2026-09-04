@@ -44,6 +44,7 @@
     renderSubjects(isDraft);
     renderCriteria(isDraft);
     renderScorers(isDraft);
+    renderHostScorer(isDraft);
   }
 
   function renderSubjects(isDraft) {
@@ -129,6 +130,44 @@
       container.appendChild(row);
     });
   }
+
+  // ホスト兼任の採点者。付け替えはフラグの移動だけで、採点者の追加・削除は
+  // 一切行わない(旧方式で作られた「ホスト」という名前のScorerも自動削除しない)。
+  function renderHostScorer(isDraft) {
+    const section = document.getElementById("hostScorerSection");
+    section.classList.toggle("hidden", !isDraft);
+    if (!isDraft) return;
+
+    const select = document.getElementById("hostScorerSelect");
+    select.innerHTML = "";
+
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "(なし)";
+    select.appendChild(none);
+
+    project.scorers.forEach((scorer) => {
+      const option = document.createElement("option");
+      option.value = String(scorer.id);
+      option.textContent = scorer.display_name;
+      if (scorer.is_host_scorer) option.selected = true;
+      select.appendChild(option);
+    });
+  }
+
+  document.getElementById("saveHostScorerButton").addEventListener("click", async () => {
+    const value = document.getElementById("hostScorerSelect").value;
+    try {
+      await apiFetch(`/api/projects/${projectId}/host-scorer`, {
+        method: "PATCH",
+        body: JSON.stringify({ scorer_id: value === "" ? null : Number(value) }),
+      });
+      showMessage(value === "" ? "ホスト兼任を解除しました" : "ホスト兼任の採点者を保存しました");
+      await load();
+    } catch (err) {
+      showMessage(err.message, { isError: true });
+    }
+  });
 
   function renderScorers(isDraft) {
     const container = document.getElementById("scorerRows");

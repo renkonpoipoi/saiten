@@ -274,8 +274,61 @@ def update_scorer_name(project: Project, scorer: Scorer, display_name: str) -> S
 def delete_scorer(project: Project, scorer: Scorer) -> None:
     _require_draft(project)
     _require_owned(project, scorer, label="Scorer")
+    # ホスト兼任だったScorerを消したら、その事実をProject側にも反映する。
+    # 「ホスト兼任がいないのに allow_host_scoring=true」という中途半端な状態を
+    # 残さないため、同一トランザクションで確定させる。
+    if scorer.is_host_scorer:
+        project.allow_host_scoring = False
     db.session.delete(scorer)
     db.session.commit()
+
+
+def set_host_scorer(project: Project, scorer: Scorer | None) -> Scorer | None:
+    """DRAFT中にHost兼任のScorerを付け替える(Noneで解除)。
+
+    Host roleはScorerの属性なので、付け替えはフラグの移動だけで完結する。
+    Scorerの追加・削除は行わない。
+
+    **順序が重要。** 「1 Projectにつき is_host_scorer=true は最大1人」という
+    部分UNIQUE INDEXと共存させるため、必ず
+
+        旧Hostを False -> flush() -> 新Hostを True -> commit
+
+    の順で書く。SQLAlchemyのunit of workは同一flush内のUPDATEを主キー順で
+    並べるため、明示的にflushを挟まないと「新Hostを立てるUPDATE」が
+    「旧Hostを降ろすUPDATE」より先に飛び、一時的に2人trueになってUNIQUE違反
+    しうる(plainなunique indexはdeferrableではないので即時に評価される)。
+    """
+    _require_draft(project)
+
+    current = (
+        Scorer.query.filter_by(project_id=project.id, is_host_scorer=True).all()
+    )
+
+    if scorer is None:
+        for existing in current:
+            existing.is_host_scorer = False
+        project.allow_host_scoring = False
+        db.session.commit()
+        return None
+
+    _require_owned(project, scorer, label="Scorer")
+    if not scorer.is_active:
+        raise ValidationError("An inactive scorer cannot take the host role.")
+
+    # 1) 旧Hostを降ろす
+    demoted = [existing for existing in current if existing.id != scorer.id]
+    for existing in demoted:
+        existing.is_host_scorer = False
+    if demoted:
+        # 2) 降格のUPDATEだけを先にDBへ送る(ここが無いとUNIQUE違反しうる)
+        db.session.flush()
+
+    # 3) 新Hostを立てる
+    scorer.is_host_scorer = True
+    project.allow_host_scoring = True
+    db.session.commit()
+    return scorer
 
 
 # ---------------------------------------------------------------------------

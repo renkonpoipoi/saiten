@@ -346,3 +346,336 @@ def test_created_page_marks_the_host_scorer(client, db):
     created = _create(client, allow_host_scoring=True, host_scorer_index=0)
     flags = {s["display_name"]: s["is_host_scorer"] for s in created["scorers"]}
     assert flags == {"吉田": True, "田中": False, "佐藤": False, "山田": False}
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A-3: DRAFT中のHost兼任の付け替え
+# ---------------------------------------------------------------------------
+
+
+def _patch_host_scorer(client, project_id, scorer_id):
+    return client.patch(
+        f"/api/projects/{project_id}/host-scorer", json={"scorer_id": scorer_id}
+    )
+
+
+def test_host_scorer_can_be_assigned_while_draft(client, db):
+    created = _create(client, allow_host_scoring=False)
+    project_id = created["project_id"]
+    target = _scorers(project_id)[2]
+
+    resp = _patch_host_scorer(client, project_id, target.id)
+    assert resp.status_code == 200
+
+    hosts = _host_scorers(project_id)
+    assert [s.id for s in hosts] == [target.id]
+    assert db.session.get(Project, project_id).allow_host_scoring is True
+
+
+def test_host_scorer_reassignment_moves_the_flag_only(client, db):
+    """A -> B の付け替えで、途中も含めて2人trueにならず、人数も変わらない。"""
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    rows = _scorers(project_id)
+    a, b = rows[0], rows[3]
+    assert a.is_host_scorer and not b.is_host_scorer
+
+    assert _patch_host_scorer(client, project_id, b.id).status_code == 200
+
+    after = _scorers(project_id)
+    assert len(after) == len(FOUR_SCORERS)
+    assert [s.is_host_scorer for s in after] == [False, False, False, True]
+    assert len(_host_scorers(project_id)) == 1
+
+
+def test_host_scorer_reassignment_backwards_also_works(client, db):
+    """新Hostのidが旧Hostより小さい場合(=flush順が逆転しうる)も成功する。"""
+    created = _create(client, allow_host_scoring=True, host_scorer_index=3)
+    project_id = created["project_id"]
+    rows = _scorers(project_id)
+    assert rows[3].is_host_scorer
+
+    assert _patch_host_scorer(client, project_id, rows[0].id).status_code == 200
+    assert [s.is_host_scorer for s in _scorers(project_id)] == [True, False, False, False]
+
+
+def test_setting_the_same_host_scorer_is_idempotent(client, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=1)
+    project_id = created["project_id"]
+    target = _scorers(project_id)[1]
+
+    for _ in range(3):
+        assert _patch_host_scorer(client, project_id, target.id).status_code == 200
+    assert [s.id for s in _host_scorers(project_id)] == [target.id]
+
+
+def test_host_scorer_can_be_cleared(client, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+
+    resp = _patch_host_scorer(client, project_id, None)
+    assert resp.status_code == 200
+    assert _host_scorers(project_id) == []
+    assert db.session.get(Project, project_id).allow_host_scoring is False
+    # 採点者は消えていない
+    assert len(_scorers(project_id)) == len(FOUR_SCORERS)
+
+
+def test_host_scorer_patch_rejects_another_projects_scorer(client, app, db):
+    mine = _create(client, allow_host_scoring=False)
+    other_client = app.test_client()
+    theirs = _create(other_client, name="他人の", allow_host_scoring=False)
+    their_scorer = _scorers(theirs["project_id"])[0]
+
+    resp = _patch_host_scorer(client, mine["project_id"], their_scorer.id)
+    assert resp.status_code == 403
+    assert _host_scorers(mine["project_id"]) == []
+    assert _host_scorers(theirs["project_id"]) == []
+
+
+def test_host_scorer_patch_requires_a_host_session(client, app, db):
+    created = _create(client, allow_host_scoring=False)
+    anonymous = app.test_client()
+    resp = anonymous.patch(
+        f"/api/projects/{created['project_id']}/host-scorer",
+        json={"scorer_id": _scorers(created["project_id"])[0].id},
+    )
+    assert resp.status_code == 403
+
+
+def test_host_scorer_patch_rejects_non_integer_ids(client, db):
+    created = _create(client, allow_host_scoring=False)
+    project_id = created["project_id"]
+    for bad in ("1", 1.5, True, [], {}):
+        resp = _patch_host_scorer(client, project_id, bad)
+        assert resp.status_code == 400, repr(bad)
+
+
+def test_host_scorer_cannot_be_changed_after_scoring_starts(client, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    start_scoring(client, project_id)
+
+    target = _scorers(project_id)[1]
+    resp = _patch_host_scorer(client, project_id, target.id)
+    assert resp.status_code == 409
+    # 変わっていない
+    assert [s.id for s in _host_scorers(project_id)] == [_scorers(project_id)[0].id]
+
+
+def test_deleting_the_host_scorer_clears_allow_host_scoring(client, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=2)
+    project_id = created["project_id"]
+    host = _host_scorers(project_id)[0]
+
+    resp = client.delete(f"/api/projects/{project_id}/scorers/{host.id}")
+    assert resp.status_code == 204
+    assert _host_scorers(project_id) == []
+    assert db.session.get(Project, project_id).allow_host_scoring is False
+    assert len(_scorers(project_id)) == len(FOUR_SCORERS) - 1
+
+
+def test_deleting_a_plain_scorer_keeps_the_host_assignment(client, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    host = _host_scorers(project_id)[0]
+    victim = _scorers(project_id)[2]
+
+    assert client.delete(
+        f"/api/projects/{project_id}/scorers/{victim.id}"
+    ).status_code == 204
+    assert [s.id for s in _host_scorers(project_id)] == [host.id]
+    assert db.session.get(Project, project_id).allow_host_scoring is True
+
+
+# ---------------------------------------------------------------------------
+# Legacy DRAFT Project (旧方式で作られた合成「ホスト」Scorer) の非破壊性
+# ---------------------------------------------------------------------------
+
+
+def _legacy_draft_project(client, db):
+    """旧方式で作られたDRAFT Projectを再現する。
+
+    「吉田 / 田中 / 佐藤 / ホスト(is_host_scorer=True)」という構成。
+    Phase 10A では自動変換も自動削除も行わない。
+    """
+    from app.services.code_service import generate_scorer_code, hash_code
+
+    created = create_project(
+        client, scorers=["吉田", "田中", "佐藤"], allow_host_scoring=False
+    )
+    project = db.session.get(Project, created["project_id"])
+    legacy = Scorer(
+        project_id=project.id,
+        display_name="ホスト",
+        access_code_hash=hash_code(generate_scorer_code()),
+        is_host_scorer=True,
+    )
+    project.allow_host_scoring = True
+    db.session.add(legacy)
+    db.session.commit()
+    return project, legacy
+
+
+def test_legacy_host_scorer_is_kept_when_the_role_moves(client, db):
+    """★ display_name == "ホスト" だけを根拠に旧Scorerを自動削除しない。
+
+    「ホスト」という名前の正規のScorerである可能性を否定できないため、
+    Host roleの付け替えはフラグの移動だけに留める。
+    """
+    project, legacy = _legacy_draft_project(client, db)
+    new_host = _scorers(project.id)[0]
+    assert new_host.display_name == "吉田"
+
+    assert _patch_host_scorer(client, project.id, new_host.id).status_code == 200
+
+    names = [s.display_name for s in _scorers(project.id)]
+    # 合成Scorerは残り続ける(削除は明示操作でのみ行う)
+    assert "ホスト" in names
+    assert len(names) == 4
+    assert db.session.get(Scorer, legacy.id) is not None
+    assert db.session.get(Scorer, legacy.id).is_host_scorer is False
+    assert [s.id for s in _host_scorers(project.id)] == [new_host.id]
+
+
+def test_legacy_host_scorer_can_still_be_removed_explicitly(client, db):
+    """自動cleanupはしないが、既存のDRAFT編集で明示的に消すことはできる。"""
+    project, legacy = _legacy_draft_project(client, db)
+    new_host = _scorers(project.id)[0]
+    _patch_host_scorer(client, project.id, new_host.id)
+
+    assert client.delete(
+        f"/api/projects/{project.id}/scorers/{legacy.id}"
+    ).status_code == 204
+    assert "ホスト" not in [s.display_name for s in _scorers(project.id)]
+    # ホスト兼任は吉田のまま(巻き添えで解除されない)
+    assert [s.id for s in _host_scorers(project.id)] == [new_host.id]
+
+
+def test_legacy_project_still_works_end_to_end(client, app, db):
+    """旧方式のProjectをそのまま採点・集計まで通せること(非破壊)。"""
+    from tests.helpers import login_scorer
+
+    project, legacy = _legacy_draft_project(client, db)
+    project_id = project.id
+    assert len(_scorers(project_id)) == 4
+
+    start_scoring(client, project_id)
+    assert (
+        Evaluation.query.filter_by(project_id=project_id).count()
+        == 4 * Subject.query.filter_by(project_id=project_id).count()
+    )
+    # 旧「ホスト」Scorerも通常のScorerとしてログインできる
+    code = project_service_regenerate(client, project_id, legacy.id)
+    scorer = app.test_client()
+    login_scorer(scorer, code)
+    assert scorer.get("/api/scorer/me/evaluations").status_code == 200
+
+
+def project_service_regenerate(client, project_id, scorer_id) -> str:
+    resp = client.post(
+        f"/api/projects/{project_id}/scorers/{scorer_id}/regenerate-code"
+    )
+    assert resp.status_code == 200
+    return resp.get_json()["code"]
+
+
+# ---------------------------------------------------------------------------
+# 付け替え順序 (10A-5 の partial UNIQUE INDEX と共存できること)
+# ---------------------------------------------------------------------------
+
+
+def test_reassignment_demotes_before_promoting(client, db):
+    """旧Hostを降ろすUPDATEを、新Hostを立てるUPDATEより先にDBへ送ること。
+
+    SQLAlchemyのunit of workは同一flush内のUPDATEを主キー順に並べるため、
+    明示的なflushが無いと「新Hostを立てる」方が先に飛び、一時的に2人trueに
+    なって部分UNIQUE INDEXに違反しうる。
+    """
+    source = (
+        Path(__file__).resolve().parent.parent
+        / "app" / "services" / "project_service.py"
+    ).read_text(encoding="utf-8")
+    body = source[source.index("def set_host_scorer("):]
+    body = body[: body.index("\ndef ", 1)] if "\ndef " in body[1:] else body
+
+    demote = body.index("existing.is_host_scorer = False")
+    flush = body.index("db.session.flush()")
+    promote = body.index("scorer.is_host_scorer = True")
+    assert demote < flush < promote
+
+
+def _create_host_uniqueness_index(db):
+    """10A-5 で migration が作るのと同じ部分UNIQUE INDEXをテスト内で張る。
+
+    静的なソース順の検査だけでは「実際にUNIQUE違反しないこと」を保証できない
+    ため、実際に制約下で付け替えを走らせる。
+    """
+    db.session.execute(
+        db.text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_scorers_one_host_per_project"
+            " ON scorers (project_id) WHERE is_host_scorer"
+        )
+    )
+    db.session.commit()
+
+
+def test_reassignment_succeeds_under_the_partial_unique_index(client, db):
+    """★ UNIQUE INDEX 存在下で A -> B -> A と付け替えても成功すること。"""
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    _create_host_uniqueness_index(db)
+
+    rows = _scorers(project_id)
+    a, b, c = rows[0], rows[3], rows[1]
+
+    # 前へ(id小 -> id大)
+    assert _patch_host_scorer(client, project_id, b.id).status_code == 200
+    assert [s.id for s in _host_scorers(project_id)] == [b.id]
+
+    # 後ろへ(id大 -> id小。flush順が逆転しうる向き)
+    assert _patch_host_scorer(client, project_id, a.id).status_code == 200
+    assert [s.id for s in _host_scorers(project_id)] == [a.id]
+
+    # 3人目へ
+    assert _patch_host_scorer(client, project_id, c.id).status_code == 200
+    assert [s.id for s in _host_scorers(project_id)] == [c.id]
+
+    # 解除して再設定
+    assert _patch_host_scorer(client, project_id, None).status_code == 200
+    assert _host_scorers(project_id) == []
+    assert _patch_host_scorer(client, project_id, b.id).status_code == 200
+    assert [s.id for s in _host_scorers(project_id)] == [b.id]
+
+
+def test_index_actually_rejects_two_host_scorers(client, db):
+    """検査そのものが有効であることの確認(索引が効いていないと無意味なため)。"""
+    import sqlalchemy
+
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    _create_host_uniqueness_index(db)
+
+    rows = _scorers(project_id)
+    try:
+        db.session.execute(
+            db.text("UPDATE scorers SET is_host_scorer = 1 WHERE id = :i"),
+            {"i": rows[1].id},
+        )
+        db.session.commit()
+        raised = False
+    except sqlalchemy.exc.IntegrityError:
+        db.session.rollback()
+        raised = True
+    assert raised, "partial unique index が効いていない"
+
+
+def test_creation_under_the_index_flags_only_one_scorer(client, db):
+    """作成時も1人しか立てないので、索引がある状態でも作成できる。"""
+    _create_host_uniqueness_index(db)
+    created = _create(client, allow_host_scoring=True, host_scorer_index=2)
+    assert len(_host_scorers(created["project_id"])) == 1
+
+    # 索引はproject単位。別Projectでもそれぞれ1人ずつ立てられる。
+    other = _create(client, name="別", allow_host_scoring=True, host_scorer_index=0)
+    assert len(_host_scorers(other["project_id"])) == 1

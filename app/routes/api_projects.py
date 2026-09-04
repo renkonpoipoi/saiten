@@ -5,7 +5,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request, session
 
 from app.auth.decorators import require_host
-from app.errors import NotFoundError
+from app.errors import NotFoundError, ValidationError
 from app.extensions import db, limiter
 from app.models import Criterion, Project, Scorer, Subject
 from app.services import project_service
@@ -183,6 +183,31 @@ def delete_scorer(project_id: int, scorer_id: int):
     scorer = _get_scorer_or_404(scorer_id)
     project_service.delete_scorer(project, scorer)
     return "", 204
+
+
+@api_projects_bp.patch("/projects/<int:project_id>/host-scorer")
+@require_host
+def set_host_scorer(project_id: int):
+    """DRAFT中にHost兼任のScorerを付け替える(scorer_id: null で解除)。
+
+    Host roleはScorerの属性なので、ここで行うのはフラグの移動だけ。
+    Scorerの追加・削除は一切行わない。旧方式で作られたProjectに残っている
+    「ホスト」という名前のScorerも、ここでは自動削除しない
+    (「ホスト」という名前の正規のScorerである可能性を否定できないため)。
+    不要なScorerの削除は従来どおりDRAFT編集の明示操作で行う。
+    """
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    raw_id = data.get("scorer_id")
+
+    scorer = None
+    if raw_id is not None:
+        if isinstance(raw_id, bool) or not isinstance(raw_id, int):
+            raise ValidationError("scorer_id must be an integer or null.")
+        scorer = _get_scorer_or_404(raw_id)
+
+    project_service.set_host_scorer(project, scorer)
+    return jsonify(_serialize_project_detail(project))
 
 
 @api_projects_bp.post("/projects/<int:project_id>/scorers/<int:scorer_id>/regenerate-code")

@@ -42,6 +42,20 @@
     <input type="text" id="newScorerName" placeholder="新しい採点者名">
     <button type="submit" id="addScorerButton">追加</button>
   </form>
+
+  {# DRAFT中のみ。Host roleはScorerの属性なので、ここで動かすのはフラグだけで
+     採点者の追加・削除は行わない。 #}
+  <div id="hostScorerSection" class="hidden" style="margin-top:20px;">
+    <h3>ホスト自身も採点する</h3>
+    <p style="color:var(--muted); font-size:.9rem;">
+      ホストとして採点する人を、上の採点者の中から1人選びます。採点者は増えません。
+      「(なし)」を選ぶとホスト兼任を解除します。
+    </p>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <select id="hostScorerSelect"></select>
+      <button type="button" id="saveHostScorerButton">保存</button>
+    </div>
+  </div>
 </section>
 
 <section class="panel">
