@@ -9,6 +9,12 @@
   <a href="#" id="analysisLink" class="hidden" style="margin-left:12px;">結果分析へ</a>
 </p>
 
+{# ホスト兼任の採点者がいるときだけ表示する。コードを入力せず、Host sessionを
+   根拠にサーバー側が対象Scorerを決めて別タブで採点画面を開く。 #}
+<p>
+  <button type="button" id="openHostScoringButton" class="hidden">採点画面を開く ↗</button>
+</p>
+
 <div id="draftNotice" class="panel hidden" style="border-color:var(--gold);">
   <h2>まだ採点は始まっていません(DRAFT)</h2>
   <p style="color:var(--muted)">被採点者・採点者・採点軸名の編集と、採点の開始はSettingsから行います。</p>

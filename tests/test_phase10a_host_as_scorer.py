@@ -13,6 +13,7 @@ is_host_scorer は従来どおり表示・割り当て用のフラグであり�
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from app.models import Evaluation, Project, Scorer, Subject
@@ -679,3 +680,212 @@ def test_creation_under_the_index_flags_only_one_scorer(client, db):
     # 索引はproject単位。別Projectでもそれぞれ1人ずつ立てられる。
     other = _create(client, name="別", allow_host_scoring=True, host_scorer_index=0)
     assert len(_host_scorers(other["project_id"])) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A-4: Host本人がコード入力なしで自分の採点画面へ入る
+# ---------------------------------------------------------------------------
+
+
+def _open_host_scoring(client, project_id):
+    return client.post(f"/api/projects/{project_id}/host-scorer-session")
+
+
+def test_host_can_open_their_own_scorer_session(client, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=2)
+    project_id = created["project_id"]
+    host = _host_scorers(project_id)[0]
+
+    resp = _open_host_scoring(client, project_id)
+    assert resp.status_code == 200
+    assert resp.get_json() == {"scorer_id": host.id, "display_name": "佐藤"}
+
+    with client.session_transaction() as sess:
+        assert sess["scorer_id"] == host.id
+        assert sess["scorer_project_id"] == project_id
+
+
+def test_host_and_scorer_sessions_coexist(client, db):
+    """★ 元タブのHost Dashboardと新タブのScorer Dashboardを同時に使える。"""
+    created = _create(client, subjects=["A"], allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    start_scoring(client, project_id)
+
+    assert _open_host_scoring(client, project_id).status_code == 200
+
+    with client.session_transaction() as sess:
+        # 別keyなので共存する。Host権限は破棄されない。
+        assert sess["host_project_id"] == project_id
+        assert sess["scorer_id"] == _host_scorers(project_id)[0].id
+
+    # 両方のAPIが同時に使える
+    assert client.get(f"/api/projects/{project_id}/progress").status_code == 200
+    assert client.get("/api/scorer/me/evaluations").status_code == 200
+
+
+def test_host_scorer_session_never_takes_a_client_supplied_id(client, app, db):
+    """clientがscorer_idを送っても無視する(なりすまし経路を作らない)。"""
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    rows = _scorers(project_id)
+    host, victim = rows[0], rows[2]
+
+    resp = client.post(
+        f"/api/projects/{project_id}/host-scorer-session",
+        json={"scorer_id": victim.id, "display_name": "佐藤"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["scorer_id"] == host.id
+    with client.session_transaction() as sess:
+        assert sess["scorer_id"] == host.id
+
+
+def test_host_scorer_session_requires_a_host_session(client, app, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    anonymous = app.test_client()
+    resp = anonymous.post(
+        f"/api/projects/{created['project_id']}/host-scorer-session"
+    )
+    assert resp.status_code == 403
+    with anonymous.session_transaction() as sess:
+        assert "scorer_id" not in sess
+
+
+def test_host_scorer_session_rejects_another_projects_host(client, app, db):
+    other_client = app.test_client()
+    theirs = _create(other_client, name="他人の", allow_host_scoring=True, host_scorer_index=0)
+
+    mine = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    resp = _open_host_scoring(client, theirs["project_id"])
+    assert resp.status_code == 403
+    with client.session_transaction() as sess:
+        # 他人のScorerになっていない
+        assert "scorer_id" not in sess
+    assert mine["project_id"] != theirs["project_id"]
+
+
+def test_host_scorer_session_409s_without_a_host_scorer(client, db):
+    created = _create(client, allow_host_scoring=False)
+    resp = _open_host_scoring(client, created["project_id"])
+    assert resp.status_code == 409
+    with client.session_transaction() as sess:
+        assert "scorer_id" not in sess
+
+
+def test_host_scorer_session_follows_a_reassignment(client, db):
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    rows = _scorers(project_id)
+
+    assert _open_host_scoring(client, project_id).get_json()["scorer_id"] == rows[0].id
+    _patch_host_scorer(client, project_id, rows[3].id)
+    assert _open_host_scoring(client, project_id).get_json()["scorer_id"] == rows[3].id
+
+
+def test_host_scorer_session_never_grants_host_rights_to_a_scorer(client, app, db):
+    """逆方向(Scorer -> Host)の経路は作らない。"""
+    from tests.helpers import login_scorer
+
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    plain = [s for s in created["scorers"] if not s["is_host_scorer"]][0]
+
+    scorer = app.test_client()
+    login_scorer(scorer, plain["code"])
+    assert _open_host_scoring(scorer, project_id).status_code == 403
+    assert scorer.get(f"/api/projects/{project_id}/progress").status_code == 403
+
+
+def test_host_scorer_session_puts_no_credentials_in_the_url(client, db):
+    """URLにもレスポンスにも平文コードを載せない。"""
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    project_id = created["project_id"]
+    resp = _open_host_scoring(client, project_id)
+
+    body = resp.get_data(as_text=True)
+    assert created["host_code"] not in body
+    for scorer in created["scorers"]:
+        assert scorer["code"] not in body
+    assert "code" not in resp.get_json()
+
+
+# --- client 側の実装契約 (静的検査) ---------------------------------------
+
+
+def _dashboard_js() -> str:
+    return (JS_DIR / "host_dashboard.js").read_text(encoding="utf-8")
+
+
+def test_dashboard_opens_the_tab_before_the_request():
+    """click gesture内で同期的にタブを確保してからPOSTすること。"""
+    js = _dashboard_js()
+    handler = js[js.index('getElementById("openHostScoringButton")'):]
+    handler = handler[: handler.index("\n  });")]
+
+    assert handler.index("window.open(") < handler.index("await apiFetch(")
+    assert 'tab.location = "/scorer"' in handler
+    assert handler.index("await apiFetch(") < handler.index('tab.location = "/scorer"')
+
+
+def test_dashboard_handles_a_blocked_popup_without_switching_sessions():
+    """★ window.open が null を返したらPOSTせずエラー表示だけで終える。"""
+    js = _dashboard_js()
+    handler = js[js.index('getElementById("openHostScoringButton")'):]
+    handler = handler[: handler.index("\n  });")]
+
+    guard = handler.index("if (!tab)")
+    request = handler.index("await apiFetch(")
+    assert guard < request, "null チェックがPOSTより後にある"
+
+    blocked = handler[guard: handler.index("\n    }", guard)]
+    assert "showMessage(" in blocked
+    assert "return;" in blocked
+    # ブロック時にサーバー側のsessionを触らない
+    assert "apiFetch" not in blocked
+
+
+def _strip_js_comments(source: str) -> str:
+    without_block = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    return re.sub(r"^\s*//.*$", "", without_block, flags=re.M)
+
+
+def test_dashboard_never_puts_codes_in_the_url_or_storage():
+    """実コード(コメントを除く)に credential の保存・送信が無いこと。"""
+    js = _strip_js_comments(_dashboard_js())
+    assert "localStorage" not in js
+    assert "sessionStorage" not in js
+    assert "host_code" not in js
+    assert "scorer_id" not in js, "clientからscorer_idを送らない"
+
+
+def test_dashboard_detaches_the_opener():
+    js = _dashboard_js()
+    assert "tab.opener = null" in js
+
+
+def test_dashboard_closes_the_tab_when_the_request_fails():
+    js = _dashboard_js()
+    handler = js[js.index('getElementById("openHostScoringButton")'):]
+    handler = handler[: handler.index("\n  });")]
+    catch_block = handler[handler.index("} catch (err)"):]
+    assert "tab.close()" in catch_block
+    assert "showMessage(" in catch_block
+
+
+def test_dashboard_button_only_shows_with_a_host_scorer(client, db):
+    js = _dashboard_js()
+    body = js[js.index("function renderHostScoringLink("):]
+    body = body[: body.index("\n  }")]
+    assert "scorer.is_host_scorer" in body
+    assert "classList.toggle(\"hidden\"" in body
+
+    html = client.get(f"/host/{_create(client)['project_id']}").get_data(as_text=True)
+    assert 'id="openHostScoringButton"' in html
+
+
+def test_phase10a_adds_no_session_architecture_change():
+    """同一ブラウザで複数Scorerを同時に扱う仕組みは今回入れない。"""
+    for path in ("app/routes/api_auth.py", "app/routes/api_projects.py"):
+        source = (Path(__file__).resolve().parent.parent / path).read_text(encoding="utf-8")
+        assert "scorer_sessions" not in source
+        assert "SESSION_COOKIE_NAME" not in source
