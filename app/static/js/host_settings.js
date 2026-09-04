@@ -2,6 +2,50 @@
   const projectId = window.PROJECT_ID;
   let project = null;
 
+  // ---------------------------------------------------------------------------
+  // UI lock
+  //
+  // 変更系APIの実行中だけ操作を止める(二重送信防止)。解除は必ず finally で
+  // 行い、成功・失敗のどちらでも永続的なdisabledが残らないようにする。
+  // 再enableはその場の render() で完了し、polling や timer を待たない。
+  // ---------------------------------------------------------------------------
+
+  let busy = false;
+
+  function isBusy() {
+    return busy;
+  }
+
+  /** DRAFTで、かつ変更系APIの実行中でないときだけ編集できる。 */
+  function canEdit() {
+    return project !== null && project.status === "DRAFT" && !busy;
+  }
+
+  function setBusy(value) {
+    busy = value;
+    document.body.dataset.busy = value ? "true" : "false";
+  }
+
+  /** 変更系APIの共通ラッパ。終了時に必ずlockを解いて最新stateを描き直す。 */
+  async function mutate(action) {
+    if (busy) return false;
+    setBusy(true);
+    if (project) render();
+    let ok = false;
+    try {
+      await action();
+      ok = true;
+    } catch (err) {
+      showMessage(err.message, { isError: true });
+    } finally {
+      // 成功でも失敗でも必ずここを通す。lockを解いてから最新stateを取り直し、
+      // render() の時点でDRAFT用controlが操作可能に戻る。
+      setBusy(false);
+      await load();
+    }
+    return ok;
+  }
+
   async function load() {
     try {
       project = await apiFetch(`/api/projects/${projectId}`);
@@ -11,6 +55,8 @@
         return;
       }
       showMessage(err.message, { isError: true });
+      // 取得に失敗しても手元のstateで描き直し、UIがlockされたままにならないようにする。
+      if (project) render();
       return;
     }
     render();
@@ -18,6 +64,8 @@
 
   function render() {
     const isDraft = project.status === "DRAFT";
+    // 構造(表示/非表示)は status だけで決め、操作可否は busy も含めて決める。
+    const editable = canEdit();
 
     document.getElementById("projectNameHeading").textContent = project.name;
     document.title = `${project.name} - Host Settings`;
@@ -32,22 +80,43 @@
 
     document.getElementById("draftOnlyNotice").classList.toggle("hidden", isDraft);
     document.getElementById("projectNameInput").value = project.name;
-    document.getElementById("projectNameSaveButton").disabled = !isDraft;
-    document.getElementById("addSubjectButton").disabled = !isDraft;
-    document.getElementById("newSubjectName").disabled = !isDraft;
-    document.getElementById("addScorerButton").disabled = !isDraft;
-    document.getElementById("newScorerName").disabled = !isDraft;
+    document.getElementById("projectNameSaveButton").disabled = !editable;
+    document.getElementById("addSubjectButton").disabled = !editable;
+    document.getElementById("newSubjectName").disabled = !editable;
+    document.getElementById("addScorerButton").disabled = !editable;
+    document.getElementById("newScorerName").disabled = !editable;
     document
       .getElementById("startScoringButton")
       .toggleAttribute("hidden", !isDraft);
 
-    renderSubjects(isDraft);
-    renderCriteria(isDraft);
-    renderScorers(isDraft);
-    renderHostScorer(isDraft);
+    renderSubjects(isDraft, editable);
+    renderCriteria(isDraft, editable);
+    renderScorers(isDraft, editable);
+    renderHostScorer(isDraft, editable);
   }
 
-  function renderSubjects(isDraft) {
+  /** 既存の名前を編集して確定するボタン。
+   *
+   * 新規追加は「追加」を押した時点で保存されるので、この操作は
+   * **既存の名前の更新**にしか使わない。文言もそれに合わせる。
+   * 入力を変更したときだけ押せるようにして、押しても何も起きない状態を減らす。
+   */
+  function buildNameUpdateButton(input, originalName, editable, action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "名前を更新";
+    button.title = "入力した名前でこの行を更新します";
+    const refresh = () => {
+      const changed = input.value.trim() !== originalName;
+      button.disabled = !editable || !changed;
+    };
+    refresh();
+    input.addEventListener("input", refresh);
+    button.addEventListener("click", () => mutate(action));
+    return button;
+  }
+
+  function renderSubjects(isDraft, editable) {
     const container = document.getElementById("subjectRows");
     container.innerHTML = "";
     project.subjects.forEach((subject) => {
@@ -56,44 +125,39 @@
       const input = document.createElement("input");
       input.type = "text";
       input.value = subject.name;
-      input.disabled = !isDraft;
+      input.disabled = !editable;
       row.appendChild(input);
 
       if (isDraft) {
-        const saveButton = document.createElement("button");
-        saveButton.textContent = "保存";
-        saveButton.addEventListener("click", async () => {
-          try {
+        const updateButton = buildNameUpdateButton(
+          input, subject.name, editable,
+          async () => {
             await apiFetch(`/api/projects/${projectId}/subjects/${subject.id}`, {
               method: "PATCH",
               body: JSON.stringify({ name: input.value.trim() }),
             });
-            showMessage("保存しました");
-            await load();
-          } catch (err) {
-            showMessage(err.message, { isError: true });
+            showMessage("名前を更新しました");
           }
-        });
+        );
         const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
         deleteButton.textContent = "削除";
         deleteButton.className = "danger";
-        deleteButton.addEventListener("click", async () => {
+        deleteButton.disabled = !editable;
+        deleteButton.addEventListener("click", () => {
           if (!confirm(`被採点者「${subject.name}」を削除しますか?この操作は取り消せません。`)) return;
-          try {
+          mutate(async () => {
             await apiFetch(`/api/projects/${projectId}/subjects/${subject.id}`, { method: "DELETE" });
             showMessage(`「${subject.name}」を削除しました`);
-            await load();
-          } catch (err) {
-            showMessage(err.message, { isError: true });
-          }
+          });
         });
-        row.append(saveButton, deleteButton);
+        row.append(updateButton, deleteButton);
       }
       container.appendChild(row);
     });
   }
 
-  function renderCriteria(isDraft) {
+  function renderCriteria(isDraft, editable) {
     const container = document.getElementById("criterionRows");
     container.innerHTML = "";
     project.criteria.forEach((criterion) => {
@@ -102,7 +166,7 @@
       const input = document.createElement("input");
       input.type = "text";
       input.value = criterion.name;
-      input.disabled = !isDraft;
+      input.disabled = !editable;
       row.appendChild(input);
 
       const maxLabel = document.createElement("span");
@@ -111,21 +175,18 @@
       row.appendChild(maxLabel);
 
       if (isDraft) {
-        const saveButton = document.createElement("button");
-        saveButton.textContent = "保存";
-        saveButton.addEventListener("click", async () => {
-          try {
-            await apiFetch(`/api/projects/${projectId}/criteria/${criterion.id}`, {
-              method: "PATCH",
-              body: JSON.stringify({ name: input.value.trim() }),
-            });
-            showMessage("保存しました");
-            await load();
-          } catch (err) {
-            showMessage(err.message, { isError: true });
-          }
-        });
-        row.appendChild(saveButton);
+        row.appendChild(
+          buildNameUpdateButton(
+            input, criterion.name, editable,
+            async () => {
+              await apiFetch(`/api/projects/${projectId}/criteria/${criterion.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ name: input.value.trim() }),
+              });
+              showMessage("名前を更新しました");
+            }
+          )
+        );
       }
       container.appendChild(row);
     });
@@ -137,15 +198,16 @@
   // **DRAFTである限り、ホスト兼任が今いるかどうかに関係なく常に操作可能にする。**
   // allow_host_scoring が false だからdisabledにする、という設計にはしない。
   // これをやると、ホスト兼任のScorerを削除した直後に誰も再割当できなくなる。
-  function renderHostScorer(isDraft) {
+  function renderHostScorer(isDraft, editable) {
     const section = document.getElementById("hostScorerSection");
     section.classList.toggle("hidden", !isDraft);
 
     const select = document.getElementById("hostScorerSelect");
     const saveButton = document.getElementById("saveHostScorerButton");
     // DRAFT以外では編集させない(構成変更はDRAFT限定という既存の制約)。
-    select.disabled = !isDraft;
-    saveButton.disabled = !isDraft;
+    // 変更系APIの実行中も一時的に止めるが、解除は mutate() の finally が保証する。
+    select.disabled = !editable;
+    saveButton.disabled = !editable;
     if (!isDraft) return;
 
     select.innerHTML = "";
@@ -167,26 +229,25 @@
 
     // 採点者が1人もいないときだけは選びようがないので、その旨を出す。
     const empty = candidates.length === 0;
-    select.disabled = empty;
-    saveButton.disabled = empty;
+    select.disabled = !editable || empty;
+    saveButton.disabled = !editable || empty;
     document.getElementById("hostScorerEmptyNote").classList.toggle("hidden", !empty);
   }
 
-  document.getElementById("saveHostScorerButton").addEventListener("click", async () => {
+  // ここは「保存」のまま。selectを変えただけではDBに確定せず、押して初めて
+  // Host role の割当が確定するという、意味のある操作だからである。
+  document.getElementById("saveHostScorerButton").addEventListener("click", () => {
     const value = document.getElementById("hostScorerSelect").value;
-    try {
+    mutate(async () => {
       await apiFetch(`/api/projects/${projectId}/host-scorer`, {
         method: "PATCH",
         body: JSON.stringify({ scorer_id: value === "" ? null : Number(value) }),
       });
       showMessage(value === "" ? "ホスト兼任を解除しました" : "ホスト兼任の採点者を保存しました");
-      await load();
-    } catch (err) {
-      showMessage(err.message, { isError: true });
-    }
+    });
   });
 
-  function renderScorers(isDraft) {
+  function renderScorers(isDraft, editable) {
     const container = document.getElementById("scorerRows");
     container.innerHTML = "";
     project.scorers.forEach((scorer) => {
@@ -195,7 +256,7 @@
       const input = document.createElement("input");
       input.type = "text";
       input.value = scorer.display_name;
-      input.disabled = !isDraft;
+      input.disabled = !editable;
       row.appendChild(input);
 
       const statusBadge = document.createElement("span");
@@ -204,55 +265,59 @@
       row.appendChild(statusBadge);
 
       if (isDraft) {
-        const saveButton = document.createElement("button");
-        saveButton.textContent = "保存";
-        saveButton.addEventListener("click", async () => {
-          try {
+        const updateButton = buildNameUpdateButton(
+          input, scorer.display_name, editable,
+          async () => {
             await apiFetch(`/api/projects/${projectId}/scorers/${scorer.id}`, {
               method: "PATCH",
               body: JSON.stringify({ display_name: input.value.trim() }),
             });
-            showMessage("保存しました");
-            await load();
-          } catch (err) {
-            showMessage(err.message, { isError: true });
+            showMessage("名前を更新しました");
           }
-        });
+        );
         const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
         deleteButton.textContent = "削除";
         deleteButton.className = "danger";
-        deleteButton.addEventListener("click", async () => {
+        deleteButton.disabled = !editable;
+        deleteButton.addEventListener("click", () => {
           if (!confirm(`採点者「${scorer.display_name}」を削除しますか?発行済みの参加コードも使えなくなります。`)) return;
-          try {
+          mutate(async () => {
             await apiFetch(`/api/projects/${projectId}/scorers/${scorer.id}`, { method: "DELETE" });
             showMessage(`「${scorer.display_name}」を削除しました`);
-            await load();
-          } catch (err) {
-            showMessage(err.message, { isError: true });
-          }
+          });
         });
-        row.append(saveButton, deleteButton);
+        row.append(updateButton, deleteButton);
       }
 
+      // コード再発行はDRAFT以外でも使える(既存挙動を維持)。
       const regenButton = document.createElement("button");
+      regenButton.type = "button";
       regenButton.textContent = "コード再発行";
-      regenButton.addEventListener("click", async () => {
+      regenButton.disabled = isBusy();
+      regenButton.addEventListener("click", () => {
         if (!confirm(`${scorer.display_name}の参加コードを再発行しますか?旧コードは無効になります。`)) return;
-        try {
+        mutate(async () => {
           const result = await apiFetch(
             `/api/projects/${projectId}/scorers/${scorer.id}/regenerate-code`,
             { method: "POST" }
           );
-          showNewScorerCode(scorer.display_name, result.code);
-        } catch (err) {
-          showMessage(err.message, { isError: true });
-        }
+          pendingScorerCode = { displayName: scorer.display_name, code: result.code };
+        });
       });
       row.appendChild(regenButton);
 
       container.appendChild(row);
     });
+
+    // コード再発行の結果は render() のたびに消えてしまうので、
+    // 直近の1件だけ保持して描画後に差し込む。
+    if (pendingScorerCode) {
+      showNewScorerCode(pendingScorerCode.displayName, pendingScorerCode.code);
+    }
   }
+
+  let pendingScorerCode = null;
 
   function showNewScorerCode(displayName, code) {
     const box = document.createElement("div");
@@ -267,64 +332,56 @@
     document.getElementById("scorerRows").prepend(box);
   }
 
-  document.getElementById("projectNameForm").addEventListener("submit", async (event) => {
+  document.getElementById("projectNameForm").addEventListener("submit", (event) => {
     event.preventDefault();
-    try {
+    mutate(async () => {
       await apiFetch(`/api/projects/${projectId}`, {
         method: "PATCH",
         body: JSON.stringify({ name: document.getElementById("projectNameInput").value.trim() }),
       });
       showMessage("保存しました");
-      await load();
-    } catch (err) {
-      showMessage(err.message, { isError: true });
-    }
+    });
   });
 
-  document.getElementById("addSubjectForm").addEventListener("submit", async (event) => {
+  document.getElementById("addSubjectForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const name = document.getElementById("newSubjectName").value.trim();
     if (!name) return;
-    try {
+    mutate(async () => {
       await apiFetch(`/api/projects/${projectId}/subjects`, {
         method: "POST",
         body: JSON.stringify({ name }),
       });
       document.getElementById("newSubjectName").value = "";
-      await load();
-    } catch (err) {
-      showMessage(err.message, { isError: true });
-    }
+      showMessage(`「${name}」を追加しました`);
+    });
   });
 
-  document.getElementById("addScorerForm").addEventListener("submit", async (event) => {
+  document.getElementById("addScorerForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const name = document.getElementById("newScorerName").value.trim();
     if (!name) return;
-    try {
+    mutate(async () => {
       const result = await apiFetch(`/api/projects/${projectId}/scorers`, {
         method: "POST",
         body: JSON.stringify({ display_name: name }),
       });
       document.getElementById("newScorerName").value = "";
-      showNewScorerCode(name, result.code);
-      await load();
-    } catch (err) {
-      showMessage(err.message, { isError: true });
-    }
+      // 発行された参加コードは render() 後に差し込む(再描画で消えないように)
+      pendingScorerCode = { displayName: name, code: result.code };
+      showMessage(`「${name}」を追加しました`);
+    });
   });
 
-  document.getElementById("regenerateHostCodeButton").addEventListener("click", async () => {
+  document.getElementById("regenerateHostCodeButton").addEventListener("click", () => {
     if (!confirm("ホストコードを再発行しますか?旧コードは無効になります。")) return;
-    try {
+    mutate(async () => {
       const result = await apiFetch(`/api/projects/${projectId}/regenerate-host-code`, {
         method: "POST",
       });
       document.getElementById("newHostCodeText").textContent = result.host_code;
       document.getElementById("newHostCodeBox").classList.remove("hidden");
-    } catch (err) {
-      showMessage(err.message, { isError: true });
-    }
+    });
   });
 
   document.getElementById("copyNewHostCodeButton").addEventListener("click", () => {
@@ -333,18 +390,15 @@
     );
   });
 
-  document.getElementById("startScoringButton").addEventListener("click", async () => {
+  document.getElementById("startScoringButton").addEventListener("click", () => {
     if (!confirm("採点を開始しますか?開始後はプロジェクト構成を変更できません。")) return;
-    try {
+    mutate(async () => {
       await apiFetch(`/api/projects/${projectId}/transition`, {
         method: "POST",
         body: JSON.stringify({ target_status: "SCORING" }),
       });
       showMessage("採点を開始しました");
-      await load();
-    } catch (err) {
-      showMessage(err.message, { isError: true });
-    }
+    });
   });
 
   load();

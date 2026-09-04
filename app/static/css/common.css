@@ -156,6 +156,11 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--lin
   padding: 10px 16px;
   border-radius: 8px;
   z-index: 50;
+  /* 通知は4秒間 z-index:50 で画面に重なる。pointer-events を切っておかないと、
+     その4秒のあいだ重なった範囲のクリック・フォーカスを奪ってしまい、
+     「操作できないが、しばらく待つと勝手に直る」という挙動になる。
+     通知に操作要素は無いので、常にクリックを透過させる。 */
+  pointer-events: none;
 }
 .toast.error { border-color: var(--red); color: #ffb4ba; }
 .hidden { display: none !important; }

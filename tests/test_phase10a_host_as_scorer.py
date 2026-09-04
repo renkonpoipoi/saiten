@@ -990,7 +990,7 @@ def _settings_js() -> str:
 
 def _render_host_scorer_body() -> str:
     js = _settings_js()
-    body = js[js.index("function renderHostScorer(isDraft) {"):]
+    body = js[js.index("function renderHostScorer(isDraft, editable) {"):]
     return body[: body.index("\n  }")]
 
 
@@ -998,9 +998,9 @@ def test_settings_select_is_never_disabled_by_allow_host_scoring():
     """★ allow_host_scoring を理由に disabled にしていないこと。"""
     body = _render_host_scorer_body()
     assert "allow_host_scoring" not in body
-    # disabled の根拠は DRAFT かどうかと、候補が0人かどうかだけ
-    assert "select.disabled = !isDraft" in body
-    assert "select.disabled = empty" in body
+    # disabled の根拠は「編集可能か(DRAFT かつ 非busy)」と「候補が0人か」だけ
+    assert "select.disabled = !editable" in body
+    assert "select.disabled = !editable || empty" in body
 
 
 def test_settings_select_lists_only_active_scorers():
@@ -1072,8 +1072,8 @@ def test_reassignment_is_still_draft_only(client, db):
     assert _patch_host_scorer(client, project_id, target.id).status_code == 409
 
     body = _render_host_scorer_body()
-    assert "select.disabled = !isDraft" in body
-    assert "saveButton.disabled = !isDraft" in body
+    assert "select.disabled = !editable" in body
+    assert "saveButton.disabled = !editable" in body
 
 
 def test_settings_select_is_styled_for_the_dark_theme():
@@ -1144,3 +1144,134 @@ def test_back_link_is_independent_from_start_scoring(client, db):
 
     # 戻る導線はページ上部(開始ボタンより前)にある
     assert html.index('id="hostDashboardLink"') < html.index('id="startScoringButton"')
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A-7: Settings の操作可否とボタン文言
+#
+# 「削除直後にしばらく操作できない」不具合の再発防止。実際にDOM上で
+# host_settings.js を走らせる検証は tests/js/settings_interaction.test.mjs
+# にあり、tests/test_phase9_js_unit.py 経由で pytest からも実行される。
+# ここではその外側の契約(timerに依存しない構造・文言)を固定する。
+# ---------------------------------------------------------------------------
+
+
+def test_settings_never_depends_on_a_timer_to_re_enable():
+    """★ 再enableがpolling / setTimeoutに依存していないこと。"""
+    js = _settings_js()
+    assert "setTimeout" not in js
+    assert "setInterval" not in js
+    assert "requestAnimationFrame" not in js
+
+
+def test_settings_busy_lock_is_always_released(client, db):
+    """★ 成功・失敗のどちらでも finally で lock を解除すること。"""
+    js = _settings_js()
+    body = js[js.index("async function mutate(action) {"):]
+    body = body[: body.index("\n  }")]
+
+    assert "try {" in body
+    assert "} catch (err)" in body
+    assert "} finally {" in body
+
+    finally_block = body[body.index("} finally {"):]
+    assert "setBusy(false)" in finally_block
+    assert "await load()" in finally_block
+    # 解除がcatch側だけ・成功側だけになっていないこと
+    catch_block = body[body.index("} catch (err)"): body.index("} finally {")]
+    assert "setBusy(false)" not in catch_block
+
+
+def test_settings_load_always_renders_even_on_failure():
+    """取得に失敗しても render() してUIのlockを解くこと。"""
+    js = _settings_js()
+    body = js[js.index("async function load() {"):]
+    body = body[: body.index("\n  }")]
+    catch_block = body[body.index("} catch (err)"):]
+    assert "render()" in catch_block
+
+
+def test_settings_editable_state_has_a_single_source(client, db):
+    """disabled の根拠を canEdit() に一本化していること。"""
+    js = _settings_js()
+    assert "function canEdit()" in js
+    body = js[js.index("function canEdit() {"):]
+    body = body[: body.index("\n  }")]
+    assert 'project.status === "DRAFT"' in body
+    assert "!busy" in body
+
+    render_body = js[js.index("function render() {"):]
+    render_body = render_body[: render_body.index("\n  }")]
+    assert "const editable = canEdit();" in render_body
+    # 個々のcontrolはeditableだけを見る
+    for control in ("addScorerButton", "newScorerName", "addSubjectButton", "newSubjectName"):
+        assert f'getElementById("{control}").disabled = !editable;' in render_body
+
+
+def test_settings_has_no_blocking_overlay(client, db):
+    """通知(toast)がクリックを奪わないこと。
+
+    .toast は z-index 50 の position:fixed で4秒間表示される。
+    pointer-events を切っていないと、その間だけ重なった範囲が操作不能になり、
+    「しばらく待つと勝手に直る」という挙動になる。
+    """
+    css = (APP_DIR / "static" / "css" / "common.css").read_text(encoding="utf-8")
+    toast = css[css.index(".toast {"):]
+    toast = toast[: toast.index("}")]
+    assert "pointer-events: none" in toast
+
+    # 画面を覆いうる fixed / absolute 要素が他に増えていないこと
+    stripped = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    assert stripped.count("position: fixed") == 1
+    assert "position: absolute" not in stripped
+
+
+def test_settings_row_buttons_are_type_button(client, db):
+    """行内のボタンが暗黙のsubmitにならないこと。"""
+    js = _settings_js()
+    assert js.count('deleteButton.type = "button"') == 2  # subject / scorer
+    assert 'regenButton.type = "button"' in js
+    build = js[js.index("function buildNameUpdateButton("):]
+    build = build[: build.index("\n  }")]
+    assert 'button.type = "button"' in build
+
+
+# --- ボタン文言 -------------------------------------------------------------
+
+
+def test_row_update_buttons_say_update_the_name():
+    """★ 採点者 / 被採点者の行は「名前を更新」。"""
+    js = _settings_js()
+    build = js[js.index("function buildNameUpdateButton("):]
+    build = build[: build.index("\n  }")]
+    assert 'button.textContent = "名前を更新"' in build
+
+    # 「保存」というラベルの行内ボタンは残っていない
+    assert 'saveButton.textContent = "保存"' not in js
+    assert js.count('textContent = "削除"') == 2
+    assert 'regenButton.textContent = "コード再発行"' in js
+
+
+def test_host_scorer_section_keeps_the_save_label(client, db):
+    """★ ホスト兼任の確定は「保存」のまま(意味のある操作なので変えない)。"""
+    html = client.get(
+        f"/host/{_create(client, allow_host_scoring=False)['project_id']}/settings"
+    ).get_data(as_text=True)
+    button = re.search(
+        r'<button[^>]*id="saveHostScorerButton"[^>]*>(.*?)</button>', html, re.S
+    )
+    assert button, "saveHostScorerButton が見つからない"
+    assert button.group(1).strip() == "保存"
+
+
+def test_add_buttons_keep_their_labels(client, db):
+    """追加ボタンの文言は現状どおり「追加」。"""
+    html = client.get(
+        f"/host/{_create(client, allow_host_scoring=False)['project_id']}/settings"
+    ).get_data(as_text=True)
+    for element_id in ("addSubjectButton", "addScorerButton"):
+        button = re.search(
+            rf'<button[^>]*id="{element_id}"[^>]*>(.*?)</button>', html, re.S
+        )
+        assert button, element_id
+        assert button.group(1).strip() == "追加", element_id
