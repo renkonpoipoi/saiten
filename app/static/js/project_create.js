@@ -6,19 +6,23 @@
   const formPanel = document.getElementById("formPanel");
   const createdPanel = document.getElementById("createdPanel");
 
-  function addRepeatableRow(container, placeholder, { removable = true } = {}) {
+  function addRepeatableRow(container, placeholder, { removable = true, onChange } = {}) {
     const row = document.createElement("div");
     row.className = "repeatable-row";
     const input = document.createElement("input");
     input.type = "text";
     input.placeholder = placeholder;
+    if (onChange) input.addEventListener("input", onChange);
     row.appendChild(input);
     if (removable) {
       const removeButton = document.createElement("button");
       removeButton.type = "button";
       removeButton.textContent = "削除";
       removeButton.className = "ghost";
-      removeButton.addEventListener("click", () => row.remove());
+      removeButton.addEventListener("click", () => {
+        row.remove();
+        if (onChange) onChange();
+      });
       row.appendChild(removeButton);
     }
     container.appendChild(row);
@@ -28,8 +32,8 @@
   // 初期表示: 被採点者2件・採点者2件・採点軸5件(固定、削除不可)
   addRepeatableRow(subjectList, "例: チームA");
   addRepeatableRow(subjectList, "例: チームB");
-  addRepeatableRow(scorerList, "例: 採点者1");
-  addRepeatableRow(scorerList, "例: 採点者2");
+  addRepeatableRow(scorerList, "例: 採点者1", { onChange: () => refreshHostScorerOptions() });
+  addRepeatableRow(scorerList, "例: 採点者2", { onChange: () => refreshHostScorerOptions() });
 
   const defaultCriteria = ["独創性", "実用性", "デザイン", "技術力", "拡張性"];
   defaultCriteria.forEach((label) => {
@@ -40,7 +44,8 @@
     addRepeatableRow(subjectList, "被採点者名");
   });
   document.getElementById("addScorerButton").addEventListener("click", () => {
-    addRepeatableRow(scorerList, "採点者名");
+    addRepeatableRow(scorerList, "採点者名", { onChange: () => refreshHostScorerOptions() });
+    refreshHostScorerOptions();
   });
 
   function collectValues(container) {
@@ -49,6 +54,48 @@
       .filter((v) => v);
   }
 
+  // ---------------------------------------------------------------------------
+  // ホスト兼任の採点者
+  //
+  // Host roleはScorerの属性であって別人格ではない。「ホスト自身も採点する」を
+  // ONにしても採点者は増えず、入力済みの採点者から1人を選ぶだけ。
+  // 選択値はindexで持つ。採点者名は重複しうるため名前では一意に指せず、
+  // サーバー側の検証も同じ「空文字除去後のscorers配列」を基準にしている。
+  // ---------------------------------------------------------------------------
+
+  const allowHostScoring = document.getElementById("allowHostScoring");
+  const hostScorerField = document.getElementById("hostScorerField");
+  const hostScorerSelect = document.getElementById("hostScorerSelect");
+
+  function refreshHostScorerOptions() {
+    const enabled = allowHostScoring.checked;
+    hostScorerField.classList.toggle("hidden", !enabled);
+    if (!enabled) return;
+
+    const names = collectValues(scorerList);
+    const previous = hostScorerSelect.value;
+    hostScorerSelect.innerHTML = "";
+    names.forEach((name, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = name;
+      hostScorerSelect.appendChild(option);
+    });
+    // 採点者を編集しても選択が飛ばないよう、可能なら元のindexを維持する
+    if (previous !== "" && Number(previous) < names.length) {
+      hostScorerSelect.value = previous;
+    }
+  }
+
+  function hostScorerIndex() {
+    if (!allowHostScoring.checked) return null;
+    const value = hostScorerSelect.value;
+    if (value === "") return null;
+    return Number(value);
+  }
+
+  allowHostScoring.addEventListener("change", refreshHostScorerOptions);
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = {
@@ -56,7 +103,8 @@
       subjects: collectValues(subjectList),
       scorers: collectValues(scorerList),
       criteria: collectValues(criterionList),
-      allow_host_scoring: document.getElementById("allowHostScoring").checked,
+      allow_host_scoring: allowHostScoring.checked,
+      host_scorer_index: hostScorerIndex(),
       presentation_mode: document.querySelector(
         'input[name="presentationMode"]:checked'
       ).value,

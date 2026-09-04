@@ -47,7 +47,17 @@
     </div>
 
     <div class="field">
-      <label><input type="checkbox" id="allowHostScoring"> ホスト自身も採点者に含める</label>
+      <label><input type="checkbox" id="allowHostScoring"> ホスト自身も採点する</label>
+      <span class="mode-note">
+        採点する人は上の「採点者」に全員入力してください。ホスト自身が採点する場合は、
+        そのうちの1人を下で選びます(採点者は増えません)。
+      </span>
+    </div>
+
+    {# ONのときだけJSが表示する。選択肢は上の採点者欄の入力値から生成する。 #}
+    <div class="field hidden" id="hostScorerField">
+      <label for="hostScorerSelect">ホストとして採点する人</label>
+      <select id="hostScorerSelect"></select>
     </div>
 
     <button type="submit" class="primary">プロジェクトを作成</button>

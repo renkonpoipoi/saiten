@@ -25,7 +25,6 @@ from app.services.code_service import generate_host_code, generate_scorer_code, 
 
 REQUIRED_CRITERION_COUNT = 5
 DEFAULT_MAX_SCORE = 20
-HOST_SCORER_DISPLAY_NAME = "ホスト"
 
 
 class ProjectStateError(ConflictError):
@@ -38,6 +37,28 @@ def _utcnow() -> datetime:
 
 def _clean_names(raw_names: list[str]) -> list[str]:
     return [n.strip() for n in raw_names if n and n.strip()]
+
+
+def _resolve_host_scorer_index(raw_index, scorer_count: int) -> int:
+    """「ホストとして採点する人」を指すindexを検証して返す。
+
+    Project作成は1リクエストで完結し、この時点ではScorer.idがまだ無いため、
+    display_nameではなく**空文字除去後のscorer配列に対するindex**で指定させる
+    (採点者名は重複しうるため名前では一意に指せない)。
+
+    boolはintのサブクラスなので、Trueが1として通ってしまわないよう明示的に弾く。
+    """
+    if raw_index is None:
+        raise ValidationError(
+            "host_scorer_index is required when allow_host_scoring is enabled."
+        )
+    if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+        raise ValidationError("host_scorer_index must be an integer.")
+    if not 0 <= raw_index < scorer_count:
+        raise ValidationError(
+            f"host_scorer_index must be between 0 and {scorer_count - 1}."
+        )
+    return raw_index
 
 
 def _require_draft(project: Project) -> None:
@@ -65,11 +86,17 @@ def create_project(
     criterion_names: list[str],
     allow_host_scoring: bool,
     presentation_mode: str = "BATCH",
+    host_scorer_index: object = None,
 ) -> dict:
     """Project/Subject/Criterion/Scorerを1トランザクションで一括作成する。
 
     戻り値には平文のhost_code・scorer codeを一度だけ含める(DBにはhashのみ
     保存する)。
+
+    **Host roleはScorerの属性であって別人格ではない。** allow_host_scoringが
+    Trueのとき、入力済みScorerのうちhost_scorer_indexで指された1人に
+    is_host_scorerを立てるだけで、Scorerの数は増やさない。
+    (Phase 10A以前は「ホスト」という名前のScorerを1人追加していた。)
     """
     name = (name or "").strip()
     if not name:
@@ -95,12 +122,20 @@ def create_project(
             f"presentation_mode must be one of {PRESENTATION_MODES}."
         )
 
+    allow_host_scoring = bool(allow_host_scoring)
+    # 検証はDBへ書き始める前に済ませる(不正なindexでProjectが作られないように)。
+    host_index = (
+        _resolve_host_scorer_index(host_scorer_index, len(scorer_names))
+        if allow_host_scoring
+        else None
+    )
+
     host_code = generate_host_code()
     project = Project(
         name=name,
         status="DRAFT",
         host_code_hash=hash_code(host_code),
-        allow_host_scoring=bool(allow_host_scoring),
+        allow_host_scoring=allow_host_scoring,
         presentation_mode=presentation_mode,
     )
     db.session.add(project)
@@ -120,12 +155,9 @@ def create_project(
         )
 
     scorer_payload = []
-    all_scorer_names = list(scorer_names)
-    if allow_host_scoring:
-        all_scorer_names.append(HOST_SCORER_DISPLAY_NAME)
-
-    for index, scorer_name in enumerate(all_scorer_names):
-        is_host_scorer = allow_host_scoring and index == len(all_scorer_names) - 1
+    for index, scorer_name in enumerate(scorer_names):
+        # 入力されたScorerのうち1人にHost roleを割り当てるだけ。人数は増やさない。
+        is_host_scorer = index == host_index
         code = generate_scorer_code()
         scorer = Scorer(
             project_id=project.id,

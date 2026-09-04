@@ -83,6 +83,9 @@ def create_project():
         criterion_names=data.get("criteria") or [],
         allow_host_scoring=bool(data.get("allow_host_scoring")),
         presentation_mode=data.get("presentation_mode") or "BATCH",
+        # allow_host_scoringがTrueのとき、入力済みScorerのうち誰がHostを兼ねるかを
+        # 指すindex(空文字除去後のscorers配列基準)。検証はservice側で行う。
+        host_scorer_index=data.get("host_scorer_index"),
     )
     project = result["project"]
 
