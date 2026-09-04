@@ -82,12 +82,10 @@
   </table>
 
   <p>
-    <button type="button" id="copyAllScorerCodesButton">参加者コードを一括コピー</button>
+    <button type="button" id="copyAllScorerCodesButton">参加者用の採点者コードを一括コピー</button>
   </p>
-  <p style="color:var(--muted); font-size:.85rem;">
-    採点者名とコードを1行ずつまとめてコピーします。
-    <strong>ホストコードは含まれません</strong>ので、そのまま参加者へ配布できます。
-  </p>
+  {# 何が除外されるかはホスト兼任の有無で変わるため、JSが本文を差し込む #}
+  <p id="bulkCopyNote" style="color:var(--muted); font-size:.85rem;"></p>
 
   <p style="margin-top:20px;">
     <a class="button primary" id="goToHostDashboardLink">ホストダッシュボードへ</a>

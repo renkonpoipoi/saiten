@@ -297,19 +297,27 @@ def test_batch_presentation_has_no_sequential_panels_shown(client, app, db):
 def test_create_page_has_bulk_copy_button(client, db):
     html = client.get("/projects/new").get_data(as_text=True)
     assert 'id="copyAllScorerCodesButton"' in html
-    assert "参加者コードを一括コピー" in html
+    assert "参加者用の採点者コードを一括コピー" in html
+    # 除外対象はホスト兼任の有無で変わるため、説明文はJSが差し込む
+    assert 'id="bulkCopyNote"' in html
 
 
-def test_bulk_copy_text_contains_every_scorer_name_and_code():
+def test_bulk_copy_text_contains_every_participant_scorer():
+    """Phase 10A: 参加者へ配布する採点者だけを1行ずつ並べる。
+
+    Phase 8Dでは全Scorerを対象にしていたが、Phase 10Aでホスト兼任の採点者を
+    除外するようになった(本人が使うコードであり配布対象ではないため)。
+    """
     js = (JS_DIR / "project_create.js").read_text(encoding="utf-8")
     build = re.search(
         r"function buildScorerCodeText\(scorers\) \{(.*?)\n  \}", js, re.S
     )
     assert build, "buildScorerCodeTextが見つからない"
     body = build.group(1)
-    # 全件を display_name: code の1行ずつに変換する
-    assert "scorers.map(" in body
-    assert "scorerLabel(scorer)" in body
+    # ホスト兼任だけを除き、残りを display_name: code の1行ずつに変換する
+    assert "!scorer.is_host_scorer" in body
+    assert ".map(" in body
+    assert "scorer.display_name" in body
     assert "scorer.code" in body
     assert '.join("\\n")' in body
 

@@ -285,3 +285,64 @@ def test_host_scoring_does_not_change_official_scorer_logic(client, app, db):
     project = db.session.get(Project, project_id)
     # まだ誰も提出していないのでBATCHのeligibleは空(host兼任も例外扱いされない)
     assert official_scorer_ids(project) == set()
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A-2: 参加者向け一括コピーの対象
+# ---------------------------------------------------------------------------
+
+
+def _create_js() -> str:
+    return (JS_DIR / "project_create.js").read_text(encoding="utf-8")
+
+
+def test_bulk_copy_excludes_only_the_host_scorer():
+    js = _create_js()
+    build = js[js.index("function buildScorerCodeText("):]
+    build = build[: build.index("\n  }")]
+    assert "!scorer.is_host_scorer" in build
+    # ホスト兼任「以外」は全員含める(参加者を取りこぼさない)
+    assert "scorer.display_name" in build
+    assert "scorer.code" in build
+
+
+def test_bulk_copy_still_never_touches_the_host_code():
+    """Phase 8D からの不変条件: ホストコードは一括コピーに入らない。"""
+    js = _create_js()
+    build = js[js.index("function buildScorerCodeText("):]
+    build = build[: build.index("\n  }")]
+    assert "host_code" not in build
+    assert "hostCodeText" not in build
+
+
+def test_bulk_copy_note_names_the_host_scorer_when_there_is_one():
+    js = _create_js()
+    note = js[js.index("function buildBulkCopyNote("):]
+    note = note[: note.index("\n  }")]
+    assert "ホストコードと、ホスト兼任の採点者" in note
+    assert "host.display_name" in note
+    # ホスト兼任がいない場合は不自然にならないよう分岐する
+    assert "if (!host)" in note
+    assert "ホストコードは含まれません" in note
+
+
+def test_bulk_copy_sends_nothing_back_to_the_server():
+    """Phase 8D からの不変条件: 作成レスポンスを使うだけで再通信しない。"""
+    js = _create_js()
+    assert js.count("apiFetch(") == 1
+    assert '"/api/projects"' in js
+
+
+def test_host_scorer_row_is_still_listed_with_its_own_copy_button():
+    """兼任者の行は残す(誰が兼任かが見えることに意味がある)。"""
+    js = _create_js()
+    assert '"(ホスト兼任)"' in js
+    assert 'tr.dataset.hostScorer = "true"' in js
+    assert '"配布不要"' in js
+
+
+def test_created_page_marks_the_host_scorer(client, db):
+    """作成完了画面がホスト兼任であることを示せる形になっていること。"""
+    created = _create(client, allow_host_scoring=True, host_scorer_index=0)
+    flags = {s["display_name"]: s["is_host_scorer"] for s in created["scorers"]}
+    assert flags == {"吉田": True, "田中": False, "佐藤": False, "山田": False}

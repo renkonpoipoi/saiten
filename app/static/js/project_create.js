@@ -125,16 +125,38 @@
     "コピーできませんでした。表示されているコードを手動で控えてください。";
 
   function scorerLabel(scorer) {
-    return scorer.display_name + (scorer.is_host_scorer ? "(ホスト)" : "");
+    return scorer.display_name + (scorer.is_host_scorer ? "(ホスト兼任)" : "");
+  }
+
+  function findHostScorer(scorers) {
+    return scorers.find((scorer) => scorer.is_host_scorer) || null;
   }
 
   /** 参加者へ配布する採点者コードだけを1行ずつ並べたテキスト。
    *
-   * ホストコードは意図的に含めない(参加者向けSlack/LINE等へ誤って
-   * ホストコードを配ってしまうのを防ぐため)。
+   * 除外するのは2つ。
+   *  - ホストコード(参加者向けSlack/LINE等へ誤って配ってしまうのを防ぐ)
+   *  - ホスト兼任の採点者のコード(本人が使うものであり、配布対象ではない)
+   *
+   * ホスト兼任者もDB上は通常のScorerでCodeを持つが、Host本人はHost
+   * Dashboardから自分の採点画面へ入れるため、通常運用ではCode入力が要らない。
    */
   function buildScorerCodeText(scorers) {
-    return scorers.map((scorer) => `${scorerLabel(scorer)}: ${scorer.code}`).join("\n");
+    return scorers
+      .filter((scorer) => !scorer.is_host_scorer)
+      .map((scorer) => `${scorer.display_name}: ${scorer.code}`)
+      .join("\n");
+  }
+
+  /** 何が除外されるかを明示する説明文。ホスト兼任がいない場合は触れない。 */
+  function buildBulkCopyNote(scorers) {
+    const host = findHostScorer(scorers);
+    if (!host) {
+      return "参加者へ配布する採点者コードだけを1行ずつまとめてコピーします。"
+        + "ホストコードは含まれません。";
+    }
+    return "参加者へ配布する採点者コードだけを1行ずつまとめてコピーします。"
+      + `ホストコードと、ホスト兼任の採点者(${host.display_name})のコードは含まれません。`;
   }
 
   function showCreated(result) {
@@ -166,9 +188,19 @@
       copyButton.textContent = "コピー";
       copyButton.addEventListener("click", () => copyToClipboard(scorer.code).then(() => showMessage("コピーしました")));
       copyTd.appendChild(copyButton);
+      if (scorer.is_host_scorer) {
+        // 個別に確認・コピーはできるが、参加者への配布対象ではない
+        tr.dataset.hostScorer = "true";
+        const note = document.createElement("span");
+        note.className = "mode-note";
+        note.textContent = "配布不要";
+        copyTd.appendChild(note);
+      }
       tr.append(nameTd, codeTd, copyTd);
       tbody.appendChild(tr);
     });
+
+    document.getElementById("bulkCopyNote").textContent = buildBulkCopyNote(result.scorers);
 
     // 一括コピーの中身は作成レスポンスからその場で組み立てるだけ。
     // サーバーへコードを送り直すことも、再取得することもしない。
