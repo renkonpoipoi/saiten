@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import false, func, true
+from sqlalchemy import false, func, text, true
 
 from app.extensions import db
 
@@ -36,6 +36,20 @@ class Scorer(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint("access_code_hash", name="uq_scorers_access_code_hash"),
+        # 1 Projectにつき is_host_scorer=true は最大1人。部分UNIQUE INDEXは
+        # PostgreSQL / SQLite の双方が対応しており、同一のDDLになる
+        # (migration c1f7a04b9e26 と対応。テーブル再構築は不要)。
+        #
+        # この制約があるため、Host roleの付け替えは
+        # 「旧Hostを降ろす -> flush -> 新Hostを立てる」の順序で行う必要がある
+        # (project_service.set_host_scorer を参照)。
+        db.Index(
+            "uq_scorers_one_host_per_project",
+            "project_id",
+            unique=True,
+            sqlite_where=text("is_host_scorer"),
+            postgresql_where=text("is_host_scorer"),
+        ),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

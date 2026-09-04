@@ -566,6 +566,9 @@ def test_no_new_migrations_were_added_in_phase9():
     assert revisions == [
         "9c4e17a2b8d3_add_presentation_modes.py",
         "b37d61517847_initial_schema.py",
+        # Phase 10A-5 で追加した部分UNIQUE INDEX(expand-only)。
+        # 検証は tests/test_phase10a_migration.py で行う。
+        "c1f7a04b9e26_enforce_one_host_scorer_per_project.py",
     ], revisions
 
 
