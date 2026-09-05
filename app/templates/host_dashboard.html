@@ -71,6 +71,19 @@
   <a class="button" id="sequentialPresentLink" href="#" style="margin-left:12px;">結果発表画面へ</a>
 </section>
 
+{# RANDOM_DRAW のときだけ表示する。ここは履歴と進捗の表示のみで、
+   抽選の実行は /host/<id>/draw に一本化する。 #}
+<section class="panel hidden" id="drawSection">
+  <h2>発表順の抽選</h2>
+  <p id="drawProgressSummary" style="color:var(--muted)"></p>
+  <ol id="drawnList" class="progress-grid" style="margin:12px 0;"></ol>
+  <p id="drawNextPlaceholder" style="color:var(--muted)"></p>
+  <p id="drawLockWarning" class="hidden" style="color:var(--gold);"></p>
+  <a class="button primary" id="openDrawPageLink" href="#" target="_blank" rel="noopener">
+    抽選画面を開く ↗
+  </a>
+</section>
+
 <section class="panel" id="closeSection">
   <h2>採点の締切</h2>
   <p style="color:var(--muted)">全員完了していれば通常の締切、未完了者がいる場合は該当者を除外して締切ます(強制締切)。</p>

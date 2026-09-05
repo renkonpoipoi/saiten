@@ -238,6 +238,45 @@ def _submit_everything(app, created, project_id):
             score_and_submit(scorer, project_id, subject.id)
 
 
+def test_batch_random_draw_cannot_lock_before_every_draw(client, app, db):
+    """★ 全件抽選する前に締め切らせない(発表順が確定しないため)。"""
+    created = _create(client)
+    pid = created["project_id"]
+    start_scoring(client, pid)
+    _submit_everything(app, created, pid)
+
+    resp = client.post(f"/api/projects/{pid}/transition", json={"target_status": "LOCKED"})
+    assert resp.status_code == 409
+    assert "draw every subject" in resp.get_json()["error"]
+    assert db.session.get(Project, pid).status == "SCORING"
+
+    # 途中まで抽選しても足りない
+    for _ in range(2):
+        client.post(f"/api/projects/{pid}/draw-next-subject",
+                    json={"expected_cursor": _cursor(db, pid)})
+    assert client.post(
+        f"/api/projects/{pid}/transition", json={"target_status": "LOCKED"}
+    ).status_code == 409
+
+
+def test_batch_random_draw_can_lock_once_every_draw_is_done(client, app, db):
+    created = _create(client)
+    pid = created["project_id"]
+    start_scoring(client, pid)
+    _submit_everything(app, created, pid)
+
+    for _ in range(4):
+        assert client.post(
+            f"/api/projects/{pid}/draw-next-subject",
+            json={"expected_cursor": _cursor(db, pid)},
+        ).status_code == 200
+
+    assert client.post(
+        f"/api/projects/{pid}/transition", json={"target_status": "LOCKED"}
+    ).status_code == 200
+    assert db.session.get(Project, pid).status == "LOCKED"
+
+
 def test_manual_lock_is_unchanged(client, app, db):
     """MANUAL は従来どおり、抽選の有無に関係なく締め切れる。"""
     created = _create(client, mode="MANUAL")
@@ -360,3 +399,386 @@ def test_order_mode_note_explains_what_the_order_is_used_for(client, db):
     assert 'id="subjectOrderModeField"' in html
     assert 'id="subjectOrderNote"' in html
     assert 'value="RANDOM_DRAW"' in html
+
+
+# ---------------------------------------------------------------------------
+# Phase 10B-5: 抽選 API(expected_cursor による compare-and-swap)
+# ---------------------------------------------------------------------------
+
+
+def _draw(client, project_id, expected_cursor):
+    return client.post(
+        f"/api/projects/{project_id}/draw-next-subject",
+        json={"expected_cursor": expected_cursor},
+    )
+
+
+def _secret_order(project_id):
+    return [
+        s.name
+        for s in Subject.query.filter_by(project_id=project_id)
+        .order_by(Subject.draw_order)
+        .all()
+    ]
+
+
+def _started(client, db, **overrides):
+    created = _create(client, **overrides)
+    pid = created["project_id"]
+    start_scoring(client, pid)
+    return created, pid, _secret_order(pid)
+
+
+def test_first_draw_reveals_exactly_one_subject(client, db):
+    _, pid, secret = _started(client, db)
+
+    body = _draw(client, pid, 0).get_json()
+    assert body["subject"]["name"] == secret[0]
+    assert body["position"] == 1
+    assert body["draw_cursor"] == 1
+    assert body["remaining_count"] == 3
+    assert body["replayed"] is False
+    # 今回の1件しか入っていない
+    assert set(body) == {"subject", "position", "draw_cursor", "remaining_count", "replayed"}
+
+
+def test_successive_draws_follow_the_secret_order(client, db):
+    _, pid, secret = _started(client, db)
+    revealed = []
+    for cursor in range(4):
+        body = _draw(client, pid, cursor).get_json()
+        revealed.append(body["subject"]["name"])
+        assert body["position"] == cursor + 1
+    assert revealed == secret
+    assert _cursor(db, pid) == 4
+
+
+# --- 冪等性 ---------------------------------------------------------------
+
+
+def test_duplicate_retry_replays_without_consuming_the_next(client, db):
+    """★ response が失われた後の再送で2組消費しないこと。"""
+    _, pid, secret = _started(client, db)
+    first = _draw(client, pid, 0).get_json()
+
+    retry = _draw(client, pid, 0)
+    assert retry.status_code == 200
+    body = retry.get_json()
+    assert body["subject"] == first["subject"]
+    assert body["position"] == 1
+    assert body["replayed"] is True
+    assert _cursor(db, pid) == 1, "cursorが進んでいない"
+
+    # 次の意図的な抽選は2組目
+    nxt = _draw(client, pid, 1).get_json()
+    assert nxt["subject"]["name"] == secret[1]
+    assert nxt["replayed"] is False
+
+
+def test_delayed_retry_of_an_old_cursor_still_replays(client, db):
+    _, pid, secret = _started(client, db)
+    for cursor in range(3):
+        _draw(client, pid, cursor)
+
+    body = _draw(client, pid, 0).get_json()
+    assert body["subject"]["name"] == secret[0]
+    assert body["replayed"] is True
+    assert _cursor(db, pid) == 3
+
+
+def test_multi_tab_same_cursor_yields_the_same_subject(client, db):
+    """★ 同じ expected_cursor の同時POSTで、両方が同じ組を認識する。"""
+    _, pid, secret = _started(client, db)
+
+    first = _draw(client, pid, 0).get_json()
+    second = _draw(client, pid, 0).get_json()
+
+    assert first["subject"] == second["subject"] == {
+        "id": first["subject"]["id"], "name": secret[0]
+    }
+    assert first["replayed"] is False
+    assert second["replayed"] is True
+    assert _cursor(db, pid) == 1
+
+
+def test_future_cursor_is_rejected_without_revealing_anything(client, db):
+    _, pid, _secret = _started(client, db)
+    for bad in (1, 2, 99):
+        resp = _draw(client, pid, bad)
+        assert resp.status_code == 409, bad
+        assert "subject" not in resp.get_json()
+    assert _cursor(db, pid) == 0
+
+
+def test_exhausted_draw_is_rejected(client, db):
+    _, pid, _secret = _started(client, db)
+    for cursor in range(4):
+        _draw(client, pid, cursor)
+
+    resp = _draw(client, pid, 4)
+    assert resp.status_code == 409
+    assert "All subjects have been drawn" in resp.get_json()["error"]
+    assert _cursor(db, pid) == 4
+
+
+def test_expected_cursor_rejects_non_integers(client, db):
+    _, pid, _secret = _started(client, db)
+    for bad in ("0", 1.5, True, None, [], {}, -1):
+        resp = _draw(client, pid, bad)
+        assert resp.status_code == 400, repr(bad)
+    assert _cursor(db, pid) == 0
+
+
+# --- 状態・認可 -----------------------------------------------------------
+
+
+def test_draw_is_rejected_for_manual_projects(client, db):
+    created = _create(client, mode="MANUAL")
+    pid = created["project_id"]
+    start_scoring(client, pid)
+    resp = _draw(client, pid, 0)
+    assert resp.status_code == 409
+    assert "does not use a random draw" in resp.get_json()["error"]
+
+
+def test_draw_is_rejected_outside_scoring(client, app, db):
+    created = _create(client)
+    pid = created["project_id"]
+    assert _draw(client, pid, 0).status_code == 409  # DRAFT
+
+    start_scoring(client, pid)
+    for info in created["scorers"]:
+        scorer = app.test_client()
+        login_scorer(scorer, info["code"])
+        for subject in subjects_for(pid):
+            score_and_submit(scorer, pid, subject.id)
+    for cursor in range(4):
+        _draw(client, pid, cursor)
+    client.post(f"/api/projects/{pid}/transition", json={"target_status": "LOCKED"})
+
+    resp = _draw(client, pid, 4)
+    assert resp.status_code == 409
+
+
+def test_draw_requires_a_host_session(client, app, db):
+    _, pid, _secret = _started(client, db)
+    anonymous = app.test_client()
+    resp = anonymous.post(
+        f"/api/projects/{pid}/draw-next-subject", json={"expected_cursor": 0}
+    )
+    assert resp.status_code == 403
+    assert _cursor(db, pid) == 0
+
+
+def test_draw_rejects_another_projects_host(client, app, db):
+    other = app.test_client()
+    theirs = _create(other, name="他人の")
+    start_scoring(other, theirs["project_id"])
+    _create(client)
+
+    resp = _draw(client, theirs["project_id"], 0)
+    assert resp.status_code == 403
+    assert _cursor(db, theirs["project_id"]) == 0
+
+
+def test_draw_never_leaks_future_order(client, db):
+    """★ レスポンスに今回の1件以外が含まれないこと。"""
+    _, pid, secret = _started(client, db)
+    raw = _draw(client, pid, 0).get_data(as_text=True)
+
+    assert _encoded(secret[0]) in raw
+    for future in secret[1:]:
+        assert _encoded(future) not in raw, future
+    assert "draw_order" not in raw
+
+
+# --- SEQUENTIAL の duplicate retry(§1 の最重要ケース) ---------------------
+
+
+def test_sequential_draw_starts_scoring_for_that_subject(client, db):
+    _, pid, secret = _started(client, db, presentation_mode="SEQUENTIAL", scorers=["s1"])
+
+    body = _draw(client, pid, 0).get_json()
+    statuses = {s.name: s.presentation_status for s in subjects_for(pid)}
+    assert statuses[body["subject"]["name"]] == "SCORING"
+    assert sorted(statuses.values()) == ["SCORING", "WAITING", "WAITING", "WAITING"]
+
+
+def test_sequential_duplicate_retry_replays_even_while_scoring(client, db):
+    """★★ 最重要。初回成功 -> response消失 -> 同じcursorで再送。
+
+    この時点で今回Subjectは既にSCORING。「発表中なら409」を先に判定すると
+    本来のduplicate retryが弾かれてしまうので、cursorの比較を先に行う。
+    """
+    _, pid, secret = _started(client, db, presentation_mode="SEQUENTIAL", scorers=["s1"])
+
+    first = _draw(client, pid, 0).get_json()
+    in_progress = [s for s in subjects_for(pid) if s.presentation_status == "SCORING"]
+    assert len(in_progress) == 1, "現在SCORINGのSubjectが居る状態"
+
+    retry = _draw(client, pid, 0)
+    assert retry.status_code == 200, "duplicate retry が409になってはいけない"
+    body = retry.get_json()
+    assert body["subject"] == first["subject"]
+    assert body["replayed"] is True
+    assert _cursor(db, pid) == 1, "cursorが進んでいない"
+    # 状態も変わっていない
+    assert [s.id for s in subjects_for(pid) if s.presentation_status == "SCORING"] == [
+        in_progress[0].id
+    ]
+
+
+def test_sequential_blocks_a_new_draw_while_a_subject_is_in_progress(client, db):
+    """新規drawだけは発表中に拒否する(retryとは区別する)。"""
+    _, pid, _secret = _started(client, db, presentation_mode="SEQUENTIAL", scorers=["s1"])
+    _draw(client, pid, 0)
+
+    resp = _draw(client, pid, 1)
+    assert resp.status_code == 409
+    assert "Finish the current subject" in resp.get_json()["error"]
+    assert _cursor(db, pid) == 1
+
+
+def test_sequential_full_cycle(client, app, db):
+    """抽選 -> 採点 -> 締切 -> 発表 -> 確定 -> 次の抽選 の一巡。"""
+    created, pid, secret = _started(
+        client, db, presentation_mode="SEQUENTIAL", scorers=["s1"], subjects=["A", "B"]
+    )
+    secret = _secret_order(pid)
+
+    for cursor, expected_name in enumerate(secret):
+        body = _draw(client, pid, cursor).get_json()
+        assert body["subject"]["name"] == expected_name
+
+        subject = [s for s in subjects_for(pid) if s.name == expected_name][0]
+        scorer = app.test_client()
+        login_scorer(scorer, created["scorers"][0]["code"])
+        score_and_submit(scorer, pid, subject.id)
+
+        assert client.post(
+            f"/api/projects/{pid}/subjects/{subject.id}/lock"
+        ).status_code == 200
+        assert client.post(
+            f"/api/projects/{pid}/subjects/{subject.id}/present"
+        ).status_code == 200
+
+        # 次は自動でSCORINGにならない(抽選するまで待つ)
+        remaining = [s for s in subjects_for(pid) if s.presentation_status == "SCORING"]
+        assert remaining == []
+
+    assert _cursor(db, pid) == 2
+    assert all(s.presentation_status == "PRESENTED" for s in subjects_for(pid))
+
+
+def test_sequential_manual_still_auto_advances(client, app, db):
+    """MANUAL の自動前進が無回帰であること。"""
+    created = _create(client, mode="MANUAL", presentation_mode="SEQUENTIAL",
+                      scorers=["s1"], subjects=["A", "B"])
+    pid = created["project_id"]
+    start_scoring(client, pid)
+
+    first = [s for s in subjects_for(pid) if s.presentation_status == "SCORING"][0]
+    scorer = app.test_client()
+    login_scorer(scorer, created["scorers"][0]["code"])
+    score_and_submit(scorer, pid, first.id)
+    client.post(f"/api/projects/{pid}/subjects/{first.id}/lock")
+    client.post(f"/api/projects/{pid}/subjects/{first.id}/present")
+
+    nxt = [s for s in subjects_for(pid) if s.presentation_status == "SCORING"]
+    assert len(nxt) == 1 and nxt[0].name == "B"
+
+
+# --- 履歴 / resume --------------------------------------------------------
+
+
+def test_draw_progress_shows_history_but_never_the_future(client, db):
+    """★ reload しても履歴と残数が復元でき、未来は含まれない。"""
+    _, pid, secret = _started(client, db)
+    _draw(client, pid, 0)
+    _draw(client, pid, 1)
+
+    progress = client.get(f"/api/projects/{pid}/progress").get_json()
+    draw = progress["draw"]
+    assert [d["name"] for d in draw["drawn"]] == secret[:2]
+    assert [d["position"] for d in draw["drawn"]] == [1, 2]
+    assert draw["draw_cursor"] == 2
+    assert draw["remaining_count"] == 2
+    assert draw["can_draw"] is True
+
+    raw = client.get(f"/api/projects/{pid}/progress").get_data(as_text=True)
+    assert "draw_order" not in raw
+    # 残り2組の「順番」は分からない(drawn にしか順位が付いていない)
+    positions = {d["name"]: d["position"] for d in draw["drawn"]}
+    assert set(positions) == set(secret[:2])
+
+
+def test_resume_continues_from_the_stored_cursor(client, db):
+    _, pid, secret = _started(client, db)
+    _draw(client, pid, 0)
+
+    # 「reload」= 状態を読み直して、返ってきた cursor をそのまま次に使う
+    cursor = client.get(f"/api/projects/{pid}/progress").get_json()["draw"]["draw_cursor"]
+    body = _draw(client, pid, cursor).get_json()
+    assert body["subject"]["name"] == secret[1]
+    assert body["position"] == 2
+
+
+# --- 実装契約 -------------------------------------------------------------
+
+
+def test_draw_checks_the_cursor_before_the_in_progress_guard():
+    """★ 判定順: cursor 比較 -> (Case C でのみ) 発表中チェック -> CAS。"""
+    source = (APP_DIR / "services" / "project_service.py").read_text(encoding="utf-8")
+    body = source[source.index("def draw_next_subject("):]
+    body = body[: body.index("\ndef _draw_result(")]
+
+    replay = body.index("if expected_cursor < project.draw_cursor:")
+    future = body.index("if expected_cursor > project.draw_cursor:")
+    in_progress = body.index('presentation_status="SCORING"')
+    cas = body.index("Project.draw_cursor == expected_cursor")
+
+    assert replay < future < in_progress < cas
+
+
+def test_draw_uses_a_single_compare_and_swap():
+    source = (APP_DIR / "services" / "project_service.py").read_text(encoding="utf-8")
+    body = source[source.index("def draw_next_subject("):]
+    body = body[: body.index("\ndef _draw_result(")]
+    assert "Project.draw_cursor == expected_cursor" in body
+    assert "Project.draw_cursor + 1" in body
+    assert "updated != 1" in body
+
+
+# --- Host Dashboard は履歴表示のみ ------------------------------------------
+
+
+def test_dashboard_shows_draw_history_only(client, db):
+    """★ 抽選の実行入口は Host Dashboard に置かない。"""
+    js = (APP_DIR / "static" / "js" / "host_dashboard.js").read_text(encoding="utf-8")
+    body = js[js.index("function renderDraw(data) {"):]
+    body = body[: body.index("\n  }")]
+
+    assert "draw.drawn" in body
+    assert "remaining_count" in body
+    assert "？？？" in body
+    # 抽選は実行しない
+    assert "draw-next-subject" not in body
+    assert "expected_cursor" not in body
+    assert "apiFetch" not in body
+    # 抽選画面への導線だけを出す
+    assert "/draw`" in body
+
+
+def test_dashboard_warns_before_every_draw_is_done(client, db):
+    js = (APP_DIR / "static" / "js" / "host_dashboard.js").read_text(encoding="utf-8")
+    assert "全被採点者の発表順抽選を完了してから採点を締め切ってください" in js
+    body = js[js.index("function renderDraw(data) {"):]
+    body = body[: body.index("\n  }")]
+    assert "closeButton" in body and "disabled = incomplete" in body
+
+
+def test_dashboard_draw_section_is_hidden_for_manual(client, db):
+    created = _create(client, mode="MANUAL")
+    html = client.get(f"/host/{created['project_id']}").get_data(as_text=True)
+    tag = re.search(r'<section[^>]*id="drawSection"[^>]*>', html)
+    assert tag and "hidden" in tag.group(0)

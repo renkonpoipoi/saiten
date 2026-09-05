@@ -191,6 +191,22 @@ def delete_scorer(project_id: int, scorer_id: int):
     return "", 204
 
 
+@api_projects_bp.post("/projects/<int:project_id>/draw-next-subject")
+@require_host
+def draw_next_subject(project_id: int):
+    """次の発表者を1組だけ公開する(RANDOM_DRAW / SCORING 中のみ)。
+
+    expected_cursor は権限情報ではなく compare-and-swap の照合値。
+    任意の値を送っても未来のdrawを消費できない(判定順は service 側を参照)。
+    レスポンスには今回公開した1件しか含めない。
+    """
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    return jsonify(
+        project_service.draw_next_subject(project, data.get("expected_cursor"))
+    )
+
+
 @api_projects_bp.patch("/projects/<int:project_id>/subject-order-mode")
 @require_host
 def set_subject_order_mode(project_id: int):

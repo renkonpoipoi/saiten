@@ -488,6 +488,121 @@ def draw_progress(project: Project) -> dict:
     }
 
 
+class DrawStateError(ConflictError):
+    """抽選できない状態(モード違い・状態違い・枯渇・発表中)を表す。"""
+
+
+def _subject_at_draw_position(project_id: int, position: int) -> Subject | None:
+    return Subject.query.filter_by(project_id=project_id, draw_order=position).first()
+
+
+def draw_next_subject(project: Project, expected_cursor) -> dict:
+    """次の発表者を1組だけ公開する。
+
+    **判定順が重要。** 先に「現在SCORINGのSubjectが居るか」を見てしまうと、
+    初回抽選が成功した直後のduplicate retry(responseだけ失われた場合)が
+    409になってしまう。そこで必ず cursor の比較を先に行い、
+    「今回新しく進めようとしているrequestか」を確定させてから状態を検査する。
+
+      Case A: expected < current  -> 成功済みdrawへのretry。**replayして返す**
+                                     (SEQUENTIALで既にSCORINGでも拒否しない)
+      Case B: expected > current  -> future / stale。409。何も公開しない
+      Case C: expected == current -> ここで初めて新規drawとして扱い、
+                                     SEQUENTIALなら発表中でないことを確かめてCAS
+
+    CASが競合で失敗した場合は cursor を読み直す。他方が先に進めていれば
+    Case A と同じ replay になるので、両方が同じSubjectを認識する。
+    """
+    if isinstance(expected_cursor, bool) or not isinstance(expected_cursor, int):
+        raise ValidationError("expected_cursor must be an integer.")
+    if expected_cursor < 0:
+        raise ValidationError("expected_cursor must not be negative.")
+
+    if project.subject_order_mode != "RANDOM_DRAW":
+        raise DrawStateError("This project does not use a random draw.")
+    if project.status != "SCORING":
+        raise DrawStateError("Scoring is not in progress.")
+
+    total = subject_count(project.id)
+
+    def _replay(position: int) -> dict:
+        subject = _subject_at_draw_position(project.id, position)
+        if subject is None:
+            raise DrawStateError("That draw position does not exist.")
+        return _draw_result(project, subject, position, total, replayed=True)
+
+    # --- Case A: 既に成功しているdrawへのretry -------------------------------
+    if expected_cursor < project.draw_cursor:
+        return _replay(expected_cursor)
+
+    # --- Case B: 未来 / stale ------------------------------------------------
+    if expected_cursor > project.draw_cursor:
+        raise DrawStateError(
+            "This draw request is out of date. Reload the page and try again."
+        )
+
+    # --- Case C: 新しく進めるrequest ----------------------------------------
+    if project.draw_cursor >= total:
+        raise DrawStateError("All subjects have been drawn.")
+
+    if project.presentation_mode == "SEQUENTIAL":
+        in_progress = Subject.query.filter_by(
+            project_id=project.id, presentation_status="SCORING"
+        ).first()
+        if in_progress is not None:
+            raise DrawStateError(
+                "Finish the current subject before drawing the next one."
+            )
+
+    # compare-and-swap。行ロックもworker数の前提も要らない単一UPDATE。
+    updated = (
+        db.session.query(Project)
+        .filter(
+            Project.id == project.id,
+            Project.draw_cursor == expected_cursor,
+            Project.subject_order_mode == "RANDOM_DRAW",
+            Project.status == "SCORING",
+            Project.draw_cursor < total,
+        )
+        .update({Project.draw_cursor: Project.draw_cursor + 1},
+                synchronize_session=False)
+    )
+
+    if updated != 1:
+        # 競合で負けた。cursorを読み直し、他方が進めていれば同じ結果をreplayする。
+        db.session.rollback()
+        db.session.refresh(project)
+        if expected_cursor < project.draw_cursor:
+            return _replay(expected_cursor)
+        raise DrawStateError("Could not draw the next subject. Please try again.")
+
+    subject = _subject_at_draw_position(project.id, expected_cursor)
+    if subject is None:
+        db.session.rollback()
+        raise DrawStateError("The draw sequence is incomplete.")
+
+    if project.presentation_mode == "SEQUENTIAL":
+        # 公開と同時にそのSubjectの採点を開始する(同一トランザクション)
+        subject.presentation_status = "SCORING"
+
+    db.session.commit()
+    db.session.refresh(project)
+    return _draw_result(project, subject, expected_cursor, total, replayed=False)
+
+
+def _draw_result(
+    project: Project, subject: Subject, position: int, total: int, *, replayed: bool
+) -> dict:
+    """今回公開した1件だけを返す。未来は1件も含めない。"""
+    return {
+        "subject": {"id": subject.id, "name": subject.name},
+        "position": position + 1,
+        "draw_cursor": project.draw_cursor,
+        "remaining_count": max(0, total - project.draw_cursor),
+        "replayed": replayed,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 並び替え(DRAFT限定)
 # ---------------------------------------------------------------------------
