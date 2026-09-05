@@ -48,8 +48,22 @@
     if (audio) audio.prime();
   }
 
+  // 動きを止めた環境かどうか。演出の尺を詰める判断にだけ使う
+  // (音は自動でmuteしない。音無しでも全情報がvisualで分かる設計のため)。
+  function prefersReducedMotion() {
+    try {
+      return !!(window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    } catch (err) {
+      return false;
+    }
+  }
+
   function playSfx(key) {
-    if (audio) audio.play(key);
+    if (!audio) return;
+    // 尺を詰めた環境では cue が重なりやすいので、直前の余韻を畳んでから鳴らす
+    if (prefersReducedMotion() && audio.cancel) audio.cancel();
+    audio.play(key);
   }
 
   function stopSfx() {
@@ -105,7 +119,10 @@
     runToken += 1;
     const token = runToken;
     setBusy(true);
-    for (const step of steps) {
+    // 動きを止めた環境では尺だけを詰める。phaseの順序も分岐も変えないので、
+    // 最終状態(順位・tier色・TOTAL)は通常再生とまったく同じになる。
+    const plan = prefersReducedMotion() ? core.reducedSteps(steps) : steps;
+    for (const step of plan) {
       if (token !== runToken) return false;
       setPhase(step.phase);
       applyStep(step);
@@ -483,15 +500,17 @@
 
   let controlsTimer = null;
 
+  // 演出中だけ薄くする。停止点(Hostの操作待ち)では薄くしない。
+  const CONTROLS_HIDE_MS = 2400;
+
   function flashControls() {
     stageControls.dataset.visible = "true";
     clearTimeout(controlsTimer);
-    // auto-hideの秒数はPhase 9Eの実ブラウザ調整で決める
     controlsTimer = setTimeout(() => {
       if (presentationRoot.dataset.busy === "true") {
         stageControls.dataset.visible = "false";
       }
-    }, 2400);
+    }, CONTROLS_HIDE_MS);
   }
 
   document.getElementById("skipButton").addEventListener("click", () => {
@@ -515,6 +534,9 @@
   });
 
   document.addEventListener("mousemove", flashControls);
+  // キーボードでフォーカスを移したときも必ず見える状態にする
+  // (aria-hidden等でfocusableな操作を隠すことはしない)。
+  document.addEventListener("focusin", flashControls);
   document.addEventListener("keydown", (event) => {
     flashControls();
     if (event.key === "Escape") skipCurrentSequence();

@@ -131,8 +131,8 @@
   </div>
 </section>
 
-{# 観客画面を邪魔しないよう右下に小さく置く。Phase 9BでJSが配線し、
-   auto-hideの秒数はPhase 9Eの実ブラウザ調整で決める。 #}
+{# 観客画面を邪魔しないよう右下に小さく置く。演出中は薄く、停止点では見えやすく、
+   mousemove / keydown / focus で必ず復帰する(Phase 9E: auto-hide 2400ms)。 #}
 <div id="stageControls" class="p-controls hidden" data-visible="false">
   <button type="button" id="fullscreenButton">全画面</button>
   <button type="button" id="skipButton">スキップ</button>

@@ -535,3 +535,61 @@ test("judgeCue never returns the total or winner cue", () => {
     assert.notEqual(cue, "winnerSting");
   }
 });
+
+/* --------------------------------------------------------------------------
+   Phase 9E: reduced motion
+   尺だけを詰める。phaseの順序も分岐も変えない。
+   -------------------------------------------------------------------------- */
+
+test("reducedSteps keeps every phase in the same order", () => {
+  const steps = core.buildSubjectSteps(4);
+  assert.deepEqual(phases(core.reducedSteps(steps)), phases(steps));
+});
+
+test("reducedSteps caps every wait", () => {
+  const steps = core.buildSequentialRankSteps(true);
+  for (const step of core.reducedSteps(steps)) {
+    assert.ok(step.duration <= core.REDUCED_STEP_CAP_MS, step.phase);
+  }
+});
+
+test("reducedSteps shortens even the longest panel by more than half", () => {
+  const steps = core.buildSubjectSteps(13);
+  const reduced = core.totalDuration(core.reducedSteps(steps));
+  assert.ok(reduced < core.totalDuration(steps) / 2);
+  // 13人でも「動かないまま延々と待たされる」尺にはならない
+  assert.ok(reduced <= steps.length * core.REDUCED_STEP_CAP_MS);
+});
+
+test("reducedSteps keeps zero-duration completion steps at zero", () => {
+  const steps = core.buildBatchFinalSteps(core.toRankGroups([
+    { id: 1, name: "A", rank: 1, sort_order: 0 },
+    { id: 2, name: "B", rank: 2, sort_order: 1 },
+  ]));
+  const reduced = core.reducedSteps(steps);
+  assert.equal(reduced[reduced.length - 1].duration, 0);
+});
+
+test("reducedSteps preserves the payload of each step", () => {
+  const reduced = core.reducedSteps([{ phase: "JUDGE_ENTER", duration: 450, index: 2 }]);
+  assert.deepEqual(reduced, [{ phase: "JUDGE_ENTER", duration: 120, index: 2 }]);
+});
+
+test("reducedSteps does not mutate the original plan", () => {
+  const steps = core.buildSubjectSteps(2);
+  const before = core.totalDuration(steps);
+  core.reducedSteps(steps);
+  assert.equal(core.totalDuration(steps), before);
+});
+
+test("reducedSteps is idempotent", () => {
+  const once = core.reducedSteps(core.buildSubjectSteps(3));
+  assert.deepEqual(core.reducedSteps(once), once);
+});
+
+test("reducedSteps accepts an explicit cap and an empty plan", () => {
+  assert.deepEqual(core.reducedSteps([{ phase: "X", duration: 900 }], 10), [
+    { phase: "X", duration: 10 },
+  ]);
+  assert.deepEqual(core.reducedSteps(), []);
+});

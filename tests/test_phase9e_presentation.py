@@ -325,9 +325,10 @@ def test_audio_is_decoration_not_a_gate(client, db):
     """演出の進行は AudioBus の戻り値を一切参照しない。"""
     for signature in ("function playSfx(", "function stopSfx("):
         body = _function_body(PRESENTATION_JS, signature)
-        assert "return" not in body, signature
-    assert "if (audio.play(" not in PRESENTATION_JS
-    assert "await audio" not in PRESENTATION_JS
+        assert "return audio" not in body, signature
+        assert "await" not in body, signature
+    for token in ("if (audio.play(", "if (playSfx(", "await audio", "= playSfx("):
+        assert token not in PRESENTATION_JS, token
 
 
 def test_audio_failures_are_swallowed(client, db):
@@ -401,3 +402,117 @@ def test_skip_stops_the_sound_of_the_skipped_sequence(client, db):
     cancel = _function_body(AUDIO_JS, "cancel: function (")
     assert "cancelScheduledValues" in cancel
     assert "stop(now + 0.01)" in cancel
+
+
+# ---------------------------------------------------------------------------
+# reduced motion / Skip / controls
+# ---------------------------------------------------------------------------
+
+
+def test_reduced_motion_only_shortens_the_waits(client, db):
+    """★ phase の順序も分岐も変えない(最終状態は通常再生と同じ)。"""
+    body = _function_body(CORE_JS, "function reducedSteps(")
+    assert "Math.min(step.duration, limit)" in body
+    for token in ("filter(", "splice(", "phase =", "if (step.phase"):
+        assert token not in body, token
+
+
+def test_the_runner_honours_prefers_reduced_motion(client, db):
+    body = _function_body(PRESENTATION_JS, "async function runSteps(")
+    assert "prefersReducedMotion()" in body
+    assert "core.reducedSteps(steps)" in body
+
+    detect = _function_body(PRESENTATION_JS, "function prefersReducedMotion(")
+    assert "(prefers-reduced-motion: reduce)" in detect
+    # matchMedia が無い環境でも落ちない
+    assert "catch" in detect
+    assert "return false" in detect
+
+
+def test_reduced_motion_does_not_mute_the_presentation(client, db):
+    """音は自動でmuteしない(視覚だけで全情報が分かる設計は別途保証)。"""
+    body = _function_body(PRESENTATION_JS, "function playSfx(")
+    assert "audio.play(key)" in body
+    # 尺を詰めた分、余韻の重なりだけを畳む
+    assert "prefersReducedMotion() && audio.cancel" in body
+
+
+def test_reduced_motion_css_covers_the_incoming_card(client, db):
+    block = REVEAL_CSS[REVEAL_CSS.index("@media (prefers-reduced-motion: reduce)"):]
+    block = block[:block.index("/* ---")]
+    assert "transition-duration: 1ms" in block
+    assert ".p-incoming" in block
+
+
+def test_skip_still_never_touches_the_server(client, db):
+    """Phase 9E で音の停止を足しても、Skipは client の演出だけを進める。"""
+    body = _function_body(PRESENTATION_JS, "function skipCurrentSequence(")
+    for token in ("apiFetch", "target_status", "transition", "/api/"):
+        assert token not in body, token
+    assert "finalState()" in body
+    assert "onComplete()" in body
+    assert "stopSfx()" in body
+
+
+def test_controls_only_fade_while_a_sequence_is_running(client, db):
+    body = _function_body(PRESENTATION_JS, "function flashControls(")
+    assert 'stageControls.dataset.visible = "true"' in body
+    assert 'presentationRoot.dataset.busy === "true"' in body
+    assert "CONTROLS_HIDE_MS" in body
+
+    hide_ms = int(re.search(r"CONTROLS_HIDE_MS = (\d+)", PRESENTATION_JS).group(1))
+    assert 1500 <= hide_ms <= 4000, hide_ms
+
+
+def test_controls_come_back_for_pointer_and_keyboard(client, db):
+    for event in ("mousemove", "keydown", "focusin"):
+        assert f'document.addEventListener("{event}"' in PRESENTATION_JS, event
+    # focus / hover では CSS 側でも必ず見えるようにしてある
+    assert ".p-controls:focus-within" in REVEAL_CSS
+    assert '.p-root[data-busy="false"] .p-controls' in REVEAL_CSS
+
+
+def test_controls_are_never_hidden_from_assistive_tech(client, db):
+    assert "aria-hidden" not in PRESENT_HTML
+    assert "display: none" not in REVEAL_CSS[
+        REVEAL_CSS.index(".p-controls {"):REVEAL_CSS.index(".p-root .p-controls button")
+    ]
+
+
+def test_judge_timing_budget_is_unchanged(client, db):
+    """Phase 9E で Judge の尺は再設計しない(既存の骨格を維持)。"""
+    timing = _function_body(CORE_JS, "var TIMING = ")
+    expected = {
+        "judgeEnter": 450, "judgeHold": 500, "judgeScore": 250,
+        "judgeVisible": 1000, "judgeSettle": 400, "judgeGap": 300,
+        "allSettled": 1400, "totalEnter": 500, "totalVisible": 1300,
+        "subjectExit": 400,
+    }
+    for key, value in expected.items():
+        assert re.search(rf"{key}: {value}\b", timing), key
+    assert "JUDGE_BUDGET_MS = 26000" in CORE_JS
+    assert "PER_JUDGE_BASE_MS = 2900" in CORE_JS
+
+
+# ---------------------------------------------------------------------------
+# Phase 10B への回帰
+# ---------------------------------------------------------------------------
+
+
+def test_draw_page_engine_is_untouched(client, db):
+    """抽選ページが使う純粋関数と結果決定ロジックに手を入れていない。"""
+    for name in ("buildDrawSteps", "drawSpinIntervals", "remainingCandidates"):
+        assert f"{name}: {name}," in CORE_JS, name
+
+    draw_js = (JS_DIR / "draw.js").read_text(encoding="utf-8")
+    assert "core.remainingCandidates(subjectNames(progress), drawnNames(progress))" in draw_js
+    assert "expected_cursor: draw.draw_cursor" in draw_js
+    # 抽選ページは結果発表のcueを持ち込まない
+    assert "totalSting" not in draw_js
+    assert "winnerSting" not in draw_js
+
+
+def test_event_order_still_drives_the_subject_order(client, db):
+    body = _function_body(PRESENTATION_JS, "function orderedSubjects(")
+    assert "core.orderByEvent(summary.subjects)" in body
+    assert "sort_order" not in body

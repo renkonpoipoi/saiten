@@ -266,6 +266,22 @@
     return JUDGE_CUES[scoreTier(score)];
   }
 
+  // prefers-reduced-motion のときに1stepへ許す最大の尺。
+  // CSS側は transition を 1ms にしているので、JS側の待ち時間だけを詰める。
+  var REDUCED_STEP_CAP_MS = 120;
+
+  /** 動きを止めた環境向けに、各stepの尺だけを短くする。
+      **phase の順序も分岐も変えない**ので、最終状態は通常と完全に同じになる。 */
+  function reducedSteps(steps, cap) {
+    var limit = cap == null ? REDUCED_STEP_CAP_MS : cap;
+    return (steps || []).map(function (step) {
+      var copy = {};
+      Object.keys(step).forEach(function (key) { copy[key] = step[key]; });
+      copy.duration = Math.min(step.duration, limit);
+      return copy;
+    });
+  }
+
   /** step配列の総尺(ms)。テストと運用尺の見積りに使う。 */
   function totalDuration(steps) {
     return (steps || []).reduce(function (sum, step) { return sum + step.duration; }, 0);
@@ -381,6 +397,8 @@
     judgeCue: judgeCue,
     orderByEvent: orderByEvent,
     totalDuration: totalDuration,
+    REDUCED_STEP_CAP_MS: REDUCED_STEP_CAP_MS,
+    reducedSteps: reducedSteps,
     railLayout: railLayout,
     toRankGroups: toRankGroups,
     revealOrder: revealOrder,
