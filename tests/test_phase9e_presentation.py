@@ -290,3 +290,114 @@ def test_total_is_larger_than_any_judge_score(client, db):
         return float(re.search(r"font-size: calc\(var\(--u\) \* ([\d.]+)\)", block).group(1))
 
     assert font_size(".p-total__value {") > font_size(".p-active__score {")
+
+
+# ---------------------------------------------------------------------------
+# Audio (asset優先 + procedural fallback)
+# ---------------------------------------------------------------------------
+
+AUDIO_JS = (PRESENTATION_JS_DIR / "audio.js").read_text(encoding="utf-8")
+MANIFEST_JS = (APP_DIR / "static" / "assets" / "sfx" / "manifest.js").read_text(encoding="utf-8")
+
+
+def test_manifest_can_stay_empty(client, db):
+    """素材を1つも置かなくても出荷できる(合成音が鳴る)。"""
+    entries = re.findall(r"^\s*(\w+):\s*\"", MANIFEST_JS, flags=re.M)
+    assert entries == [], entries
+
+
+def test_manifest_documents_every_logical_cue(client, db):
+    for cue in (
+        "judgeStandard", "judgeSilver", "judgeGold", "judgePremium",
+        "totalSting", "rankTick", "rankSettle", "winnerSting",
+    ):
+        assert cue in MANIFEST_JS, cue
+
+
+def test_no_broadcast_audio_or_spoken_score(client, db):
+    """放送音源・実在人物の音声・読み上げ・BGM を持ち込まない。"""
+    code = _code_only(AUDIO_JS) + _code_only(MANIFEST_JS) + _code_only(PRESENTATION_JS)
+    for token in ("speechSynthesis", "SpeechUtterance", "点!", "bgm", "music", "youtube", "http"):
+        assert token not in code, token
+
+
+def test_audio_is_decoration_not_a_gate(client, db):
+    """演出の進行は AudioBus の戻り値を一切参照しない。"""
+    for signature in ("function playSfx(", "function stopSfx("):
+        body = _function_body(PRESENTATION_JS, signature)
+        assert "return" not in body, signature
+    assert "if (audio.play(" not in PRESENTATION_JS
+    assert "await audio" not in PRESENTATION_JS
+
+
+def test_audio_failures_are_swallowed(client, db):
+    play = _function_body(AUDIO_JS, "function playProcedural(")
+    assert "try {" in play and "catch" in play
+    assert "return false" in play
+    asset = _function_body(AUDIO_JS, "function playAsset(")
+    assert "playProcedural(key)" in asset, "asset失敗時のfallbackがない"
+
+
+def test_one_audio_context_is_reused(client, db):
+    """AudioContext を大量に作らない。"""
+    assert _code_only(AUDIO_JS).count("new Ctor()") == 1
+    body = _function_body(AUDIO_JS, "function ensureContext(")
+    assert "if (context) return context;" in body
+
+
+def test_oscillators_are_released_after_they_finish(client, db):
+    body = _function_body(AUDIO_JS, "function track(")
+    assert "onended" in body
+    assert "disconnect()" in body
+    layer = _function_body(AUDIO_JS, "function playLayer(")
+    assert "oscillator.stop(" in layer, "止め忘れた node が残る"
+
+
+def test_judge_cue_fires_when_the_score_becomes_visible(client, db):
+    """★ カード登場時に先走らず、点数が見える瞬間に鳴らす。"""
+    body = _function_body(PRESENTATION_JS, "function applySubjectStep(")
+    enter = body.index('case "JUDGE_ENTER"')
+    score = body.index('case "JUDGE_SCORE"')
+    assert "playSfx" not in body[enter:score]
+    assert "playSfx(core.judgeCue(" in body[score:]
+
+
+def test_total_always_uses_the_same_cue(client, db):
+    body = _function_body(PRESENTATION_JS, "function applySubjectStep(")
+    assert body.count('playSfx("totalSting")') == 1
+    assert "judgeCue(subject.total_score)" not in PRESENTATION_JS
+    assert "scoreTier(subject.total_score)" not in PRESENTATION_JS
+
+
+def test_winner_sting_fires_once_per_rank_group(client, db):
+    """同率1位でも rank group 単位で1回だけ鳴る。"""
+    final_step = _function_body(PRESENTATION_JS, "function applyFinalStep(")
+    assert final_step.count('playSfx("winnerSting")') == 1
+    rank_step = _function_body(PRESENTATION_JS, "function applyRankStep(")
+    assert rank_step.count('playSfx("winnerSting")') == 1
+
+
+def test_ranking_cues_are_not_fired_per_row(client, db):
+    """rankTick が行ごとに何度も鳴らないこと(sequenceのstep単位で1回)。"""
+    rank_step = _function_body(PRESENTATION_JS, "function applyRankStep(")
+    assert rank_step.count('playSfx("rankTick")') == 1
+    assert rank_step.count('playSfx("rankSettle")') == 1
+    render = _function_body(PRESENTATION_JS, "function renderRankingList(")
+    assert "playSfx" not in render
+
+
+def test_audio_is_primed_from_a_host_click(client, db):
+    """autoplay制限は最初のHostクリックで解除する。"""
+    for handler in ("startRevealButton", "batchRevealButton", "revealSubjectButton"):
+        body = _function_body(PRESENTATION_JS, f'getElementById("{handler}").addEventListener')
+        assert "prepareAudio()" in body, handler
+    prime = _function_body(AUDIO_JS, "prime: function (")
+    assert "resume" in prime
+
+
+def test_skip_stops_the_sound_of_the_skipped_sequence(client, db):
+    body = _function_body(PRESENTATION_JS, "function skipCurrentSequence(")
+    assert "stopSfx()" in body
+    cancel = _function_body(AUDIO_JS, "cancel: function (")
+    assert "cancelScheduledValues" in cancel
+    assert "stop(now + 0.01)" in cancel

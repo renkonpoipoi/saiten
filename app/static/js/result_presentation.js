@@ -52,6 +52,10 @@
     if (audio) audio.play(key);
   }
 
+  function stopSfx() {
+    if (audio && audio.cancel) audio.cancel();
+  }
+
   function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -129,6 +133,8 @@
     if (!sequence) return;
     activeSequence = null;
     runToken += 1;
+    // 飛ばした演出の音が後から鳴り続けないようにする
+    stopSfx();
     setBusy(false);
     sequence.finalState();
     sequence.onComplete();
@@ -151,12 +157,13 @@
   function applySubjectStep(step, subject, judges) {
     switch (step.phase) {
       case "JUDGE_ENTER":
+        // 音は鳴らさない。得点帯のcueが「点数が見える前」に先走らないため。
         stage.enterJudge(stageRefs, judges[step.index], step.index);
-        playSfx("judgeMove");
         break;
       case "JUDGE_SCORE":
         stage.revealJudgeScore(stageRefs, judges[step.index]);
-        playSfx("judgeHit");
+        // 得点帯ごとのcue。判定はサーバーの得点だけに依存する純粋関数。
+        playSfx(core.judgeCue(judges[step.index].total));
         break;
       case "JUDGE_SETTLE":
         stage.settleJudge(stageRefs, judges[step.index], step.index);
@@ -166,8 +173,9 @@
         stage.clearCenter(stageRefs);
         break;
       case "TOTAL_ENTER":
+        // TOTALのcueは得点に依存しない。値が画面に出るのと同じ瞬間に鳴らす。
         stage.revealTotal(stageRefs, subject.total_score);
-        playSfx("total");
+        playSfx("totalSting");
         break;
       default:
         break;
@@ -358,7 +366,8 @@
       case "WINNER_REVEAL": {
         appendGroupCard(stageRefs.rankingTop, groupByRank(groups, step.rank), groups, "enter");
         rankingPanel.dataset.winner = "true";
-        playSfx("winner");
+        // 同率1位でも rank group 単位なので、1位グループ全体に対して1回だけ鳴る
+        playSfx("winnerSting");
         break;
       }
       default:
