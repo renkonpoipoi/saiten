@@ -6,6 +6,7 @@ route側はHTTPの入出力にのみ責務を持ち、業務ロジックはこ�
 
 from __future__ import annotations
 
+import secrets
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from app.errors import ConflictError, ForbiddenError, ValidationError
 from app.extensions import db
 from app.models import (
     PRESENTATION_MODES,
+    SUBJECT_ORDER_MODES,
     Criterion,
     Evaluation,
     Project,
@@ -386,6 +388,107 @@ def set_host_scorer(project: Project, scorer: Scorer | None) -> Scorer | None:
 
 
 # ---------------------------------------------------------------------------
+# 発表順モードと抽選
+# ---------------------------------------------------------------------------
+
+
+def set_subject_order_mode(project: Project, mode: str) -> Project:
+    """発表順の決め方を切り替える(DRAFT限定)。
+
+    RANDOM_DRAWを選んでもこの時点では秘密順を作らない。DRAFT中はSubjectの
+    追加・削除・改名が自由にできるので、構成がfreezeされるSCORING開始時まで
+    生成を遅らせる(§I)。
+    """
+    _require_draft(project)
+    if mode is not None and not isinstance(mode, str):
+        raise ValidationError("subject_order_mode must be a string.")
+    mode = (mode or "").strip().upper()
+    if mode not in SUBJECT_ORDER_MODES:
+        raise ValidationError(
+            f"subject_order_mode must be one of {SUBJECT_ORDER_MODES}."
+        )
+    project.subject_order_mode = mode
+    db.session.commit()
+    return project
+
+
+def _generate_draw_sequence(project: Project, subjects: list[Subject]) -> None:
+    """秘密の発表順を一度だけ確定する。
+
+    OS entropy 由来の SystemRandom を使う。暗号設計を持ち込むためではなく、
+    「意図しない固定seed / 予測可能な列」を避けるため。
+    生成後は immutable で、reroll する経路は用意しない。
+    """
+    shuffled = list(subjects)
+    secrets.SystemRandom().shuffle(shuffled)
+    # UNIQUE(project_id, draw_order) があるので、一旦NULLへ退避してから割り当てる
+    for subject in shuffled:
+        subject.draw_order = None
+    db.session.flush()
+    for index, subject in enumerate(shuffled):
+        subject.draw_order = index
+    project.draw_cursor = 0
+
+
+def published_subjects(project: Project) -> list[Subject]:
+    """既に抽選で公開されたSubjectを、公開された順に返す。
+
+    公開済みの定義は draw_order < draw_cursor の**一点のみ**。
+    別途 drawn_at のような第2の真実源は持たない。
+    """
+    if project.subject_order_mode != "RANDOM_DRAW":
+        return []
+    return (
+        Subject.query.filter(
+            Subject.project_id == project.id,
+            Subject.draw_order.isnot(None),
+            Subject.draw_order < project.draw_cursor,
+        )
+        .order_by(Subject.draw_order)
+        .all()
+    )
+
+
+def subject_count(project_id: int) -> int:
+    return (
+        db.session.query(func.count(Subject.id))
+        .filter(Subject.project_id == project_id)
+        .scalar()
+        or 0
+    )
+
+
+def draw_progress(project: Project) -> dict:
+    """抽選の「過去」だけを返す。**未来は絶対に含めない。**
+
+    秘密なのはSubject名ではなく順序なので、Subject名自体は他のAPIが返してよい。
+    ここが返すのは、公開済みの並び・公開件数・残数・抽選可否だけで、
+    draw_order も next Subject も含まない構造にしてある。
+    """
+    total = subject_count(project.id)
+    if project.subject_order_mode != "RANDOM_DRAW":
+        return {
+            "subject_order_mode": project.subject_order_mode,
+            "draw_cursor": 0,
+            "drawn": [],
+            "remaining_count": 0,
+            "can_draw": False,
+        }
+
+    drawn = published_subjects(project)
+    return {
+        "subject_order_mode": project.subject_order_mode,
+        "draw_cursor": project.draw_cursor,
+        "drawn": [
+            {"position": index + 1, "id": subject.id, "name": subject.name}
+            for index, subject in enumerate(drawn)
+        ],
+        "remaining_count": max(0, total - project.draw_cursor),
+        "can_draw": project.status == "SCORING" and project.draw_cursor < total,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 並び替え(DRAFT限定)
 # ---------------------------------------------------------------------------
 
@@ -582,10 +685,21 @@ def transition_to_scoring(project: Project) -> Project:
                 Evaluation(project_id=project.id, scorer_id=scorer.id, subject_id=subject.id)
             )
 
+    random_draw = project.subject_order_mode == "RANDOM_DRAW"
+    if random_draw:
+        # 構成がfreezeされるこの瞬間に、秘密の発表順を一度だけ確定する。
+        _generate_draw_sequence(project, subjects)
+
     if project.presentation_mode == "SEQUENTIAL":
-        # 最初のSubjectだけを採点可能にし、残りは待機させる。
-        for index, subject in enumerate(subjects):
-            subject.presentation_status = "SCORING" if index == 0 else "WAITING"
+        if random_draw:
+            # 誰が最初かは抽選するまで分からないので、全員待機のままにする。
+            # (先頭をSCORINGにすると、それ自体が「次は誰か」の漏洩になる)
+            for subject in subjects:
+                subject.presentation_status = "WAITING"
+        else:
+            # 最初のSubjectだけを採点可能にし、残りは待機させる。
+            for index, subject in enumerate(subjects):
+                subject.presentation_status = "SCORING" if index == 0 else "WAITING"
 
     project.status = "SCORING"
     # Evaluationの一括生成・Subject状態の初期化・Project statusの更新を
@@ -617,6 +731,18 @@ def transition_to_locked(project: Project) -> Project:
         if not eligible_ids:
             raise ProjectStateError(
                 "Cannot lock: no eligible scorer has completed all subjects yet."
+            )
+
+    # 抽選を最後まで終えていないと発表順が確定しない。全件抽選する前に締め切ると、
+    # 実際には抽選していないSubjectのdraw_orderが結果発表順として使われてしまう。
+    # SEQUENTIALは「全SubjectがPRESENTED」条件により自然に満たされるが、
+    # 同じinvariantを通して二重に守る。MANUALは素通りする。
+    if project.subject_order_mode == "RANDOM_DRAW":
+        total = subject_count(project.id)
+        if project.draw_cursor < total:
+            raise ProjectStateError(
+                "Cannot lock: draw every subject first "
+                f"({project.draw_cursor} of {total} drawn)."
             )
 
     project.status = "LOCKED"
@@ -725,13 +851,17 @@ def present_subject(project: Project, subject: Subject) -> tuple[Subject, Subjec
     subject.presentation_status = "PRESENTED"
     subject.presented_at = _utcnow()
 
-    next_subject = (
-        Subject.query.filter_by(project_id=project.id, presentation_status="WAITING")
-        .order_by(Subject.sort_order)
-        .first()
-    )
-    if next_subject is not None:
-        next_subject.presentation_status = "SCORING"
+    # RANDOM_DRAWでは次を自動でSCORINGにしない。それをすると「次は誰か」が
+    # 抽選前に確定して漏れてしまう。次はHostが抽選したときだけ決まる。
+    next_subject = None
+    if project.subject_order_mode != "RANDOM_DRAW":
+        next_subject = (
+            Subject.query.filter_by(project_id=project.id, presentation_status="WAITING")
+            .order_by(Subject.sort_order)
+            .first()
+        )
+        if next_subject is not None:
+            next_subject.presentation_status = "SCORING"
 
     db.session.commit()
     return subject, next_subject
@@ -831,6 +961,7 @@ def build_presentation_state(project: Project) -> dict:
         },
         "subjects": subject_rows,
         "participating_scorer_count": len(participating_scorer_ids(project.id)),
+        "draw": draw_progress(project),
         **_progression_summary(project, subject_rows),
     }
 
@@ -879,5 +1010,7 @@ def get_progress(project: Project) -> dict:
         "eligible_scorer_count": len(eligible_ids),
         "incomplete_scorer_count": len(scorers) - len(eligible_ids),
         "participating_scorer_count": len(participating_scorer_ids(project.id)),
+        "subject_order_mode": project.subject_order_mode,
+        "draw": draw_progress(project),
         **_progression_summary(project, subject_rows),
     }

@@ -59,6 +59,8 @@ def _serialize_project_detail(project: Project) -> dict:
         "name": project.name,
         "status": project.status,
         "allow_host_scoring": project.allow_host_scoring,
+        # 発表順の決め方。draw_order(秘密順)はここでは絶対に返さない。
+        "subject_order_mode": project.subject_order_mode,
         "subjects": [{"id": s.id, "name": s.name, "sort_order": s.sort_order} for s in subjects],
         "criteria": [
             {"id": c.id, "name": c.name, "max_score": c.max_score, "sort_order": c.sort_order}
@@ -187,6 +189,16 @@ def delete_scorer(project_id: int, scorer_id: int):
     scorer = _get_scorer_or_404(scorer_id)
     project_service.delete_scorer(project, scorer)
     return "", 204
+
+
+@api_projects_bp.patch("/projects/<int:project_id>/subject-order-mode")
+@require_host
+def set_subject_order_mode(project_id: int):
+    """発表順の決め方(MANUAL / RANDOM_DRAW)を切り替える(DRAFT限定)。"""
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    project_service.set_subject_order_mode(project, data.get("subject_order_mode"))
+    return jsonify(_serialize_project_detail(project))
 
 
 @api_projects_bp.patch("/projects/<int:project_id>/subjects/order")

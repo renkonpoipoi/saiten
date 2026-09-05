@@ -89,11 +89,57 @@
       .getElementById("startScoringButton")
       .toggleAttribute("hidden", !isDraft);
 
+    renderSubjectOrderMode(isDraft, editable);
     renderSubjects(isDraft, editable);
     renderCriteria(isDraft, editable);
     renderScorers(isDraft, editable);
     renderHostScorer(isDraft, editable);
   }
+
+  // ---------------------------------------------------------------------------
+  // 発表順モード
+  //
+  // RANDOM_DRAW を選んでも Subject.sort_order は残る。ただしそれは管理画面上の
+  // 表示順であって本番の発表順ではない。Host が「手動で並べたのに使われない」と
+  // 誤解しないよう、モードごとに何に使われるかを明示する。
+  // ---------------------------------------------------------------------------
+
+  const ORDER_MODE_NOTES = {
+    MANUAL: "この並び順が採点・発表順として使用されます。",
+    RANDOM_DRAW:
+      "ランダム抽選では、この並び順は管理画面上の表示順として使用されます。" +
+      "本番の発表順は採点開始時にランダムで決定され、抽選するまで表示されません。",
+  };
+
+  function currentOrderMode() {
+    return project.subject_order_mode || "MANUAL";
+  }
+
+  function renderSubjectOrderMode(isDraft, editable) {
+    document.getElementById("subjectOrderModeField").classList.toggle("hidden", !isDraft);
+    const mode = currentOrderMode();
+    document.querySelectorAll('input[name="subjectOrderMode"]').forEach((radio) => {
+      radio.checked = radio.value === mode;
+      radio.disabled = !editable;
+    });
+    document.getElementById("subjectOrderNote").textContent = ORDER_MODE_NOTES[mode] || "";
+  }
+
+  document.querySelectorAll('input[name="subjectOrderMode"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (!radio.checked) return;
+      const mode = radio.value;
+      mutate(async () => {
+        await apiFetch(`/api/projects/${projectId}/subject-order-mode`, {
+          method: "PATCH",
+          body: JSON.stringify({ subject_order_mode: mode }),
+        });
+        showMessage(
+          mode === "RANDOM_DRAW" ? "発表順をランダム抽選にしました" : "発表順を手動設定にしました"
+        );
+      });
+    });
+  });
 
   // ---------------------------------------------------------------------------
   // 並び替え

@@ -26,6 +26,7 @@ const ELEMENT_IDS = [
   // Phase 10B-3: 並び替え
   "subjectOrderNote", "subjectOrderActions", "saveSubjectOrderButton", "subjectOrderDirty",
   "scorerOrderActions", "saveScorerOrderButton", "scorerOrderDirty",
+  "subjectOrderModeField", "subjectOrderNote",
 ];
 
 class El {
@@ -92,6 +93,14 @@ function baseProject() {
 async function boot({ failDelete = false, subjects, scorers, status } = {}) {
   const ids = {};
   ELEMENT_IDS.forEach((id) => { ids[id] = new El(id.includes("Select") ? "select" : "div"); });
+  const manualRadio = new El("input");
+  manualRadio.value = "MANUAL";
+  const randomRadio = new El("input");
+  randomRadio.value = "RANDOM_DRAW";
+  const radiosBySelector = {
+    'input[name="subjectOrderMode"]': [manualRadio, randomRadio],
+  };
+  ids.subjectOrderModeRadios = radiosBySelector['input[name="subjectOrderMode"]'];
   const calls = [];
   const toasts = [];
   const bodies = [];
@@ -111,6 +120,7 @@ async function boot({ failDelete = false, subjects, scorers, status } = {}) {
     getElementById: (id) => ids[id] ?? null,
     createElement: (t) => new El(t),
     querySelector: () => null,
+    querySelectorAll: (selector) => (radiosBySelector[selector] || []),
     body: new El("body"),
     title: "",
   };
@@ -199,7 +209,8 @@ test("an inactive scorer is never offered as a host scorer", async () => {
   globalThis.document = {
     getElementById: (id) => ids[id] ?? null,
     createElement: (t) => new El(t),
-    querySelector: () => null, body: new El("body"), title: "",
+    querySelector: () => null, querySelectorAll: () => [],
+    body: new El("body"), title: "",
   };
   globalThis.window = { PROJECT_ID: 1 };
   globalThis.confirm = () => true;

@@ -26,6 +26,21 @@
 
 <section class="panel">
   <h2>被採点者</h2>
+
+  {# 発表順の決め方。DRAFT中のみ変更でき、サーバー側でも強制する。 #}
+  <div id="subjectOrderModeField" class="field hidden">
+    <label>発表順</label>
+    <label class="mode-option">
+      <input type="radio" name="subjectOrderMode" value="MANUAL">
+      手動で設定
+    </label>
+    <label class="mode-option">
+      <input type="radio" name="subjectOrderMode" value="RANDOM_DRAW">
+      ランダム抽選
+    </label>
+  </div>
+
+  {# 並び順が何に使われるかはモードで変わるので、JSが本文を差し込む #}
   <p id="subjectOrderNote" style="color:var(--muted); font-size:.85rem;"></p>
   <div id="subjectRows" class="progress-grid"></div>
   <p id="subjectOrderActions" class="hidden" style="margin-top:12px;">
