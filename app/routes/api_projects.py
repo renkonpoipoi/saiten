@@ -189,6 +189,31 @@ def delete_scorer(project_id: int, scorer_id: int):
     return "", 204
 
 
+@api_projects_bp.patch("/projects/<int:project_id>/subjects/order")
+@require_host
+def reorder_subjects(project_id: int):
+    """被採点者の並び順を一括保存する(DRAFT限定)。
+
+    1件ずつのswapではなく全体の順序を1リクエストで受け取る。
+    subjectsには UNIQUE(project_id, sort_order) があるため、service側が
+    2段階代入(退避 -> flush -> 0..N-1)で衝突を避ける。
+    """
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    project_service.reorder_subjects(project, data.get("subject_ids"))
+    return jsonify(_serialize_project_detail(project))
+
+
+@api_projects_bp.patch("/projects/<int:project_id>/scorers/order")
+@require_host
+def reorder_scorers(project_id: int):
+    """採点者の並び順(座席順)を一括保存する(DRAFT限定)。"""
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    project_service.reorder_scorers(project, data.get("scorer_ids"))
+    return jsonify(_serialize_project_detail(project))
+
+
 @api_projects_bp.patch("/projects/<int:project_id>/host-scorer")
 @require_host
 def set_host_scorer(project_id: int):

@@ -386,6 +386,62 @@ def set_host_scorer(project: Project, scorer: Scorer | None) -> Scorer | None:
 
 
 # ---------------------------------------------------------------------------
+# 並び替え(DRAFT限定)
+# ---------------------------------------------------------------------------
+
+
+def _validate_reorder_ids(raw_ids, rows, *, label: str) -> list[int]:
+    """並び替えリクエストのIDリストを検証する。
+
+    「現存する集合と過不足なく一致すること」を要求する。部分的な並び替えを
+    許すと、送られてこなかった行の順位が不定になるため。
+    """
+    if not isinstance(raw_ids, list):
+        raise ValidationError(f"{label}_ids must be a list.")
+    for raw_id in raw_ids:
+        if isinstance(raw_id, bool) or not isinstance(raw_id, int):
+            raise ValidationError(f"{label}_ids must contain integers.")
+
+    requested = list(raw_ids)
+    if len(set(requested)) != len(requested):
+        raise ValidationError(f"{label}_ids must not contain duplicates.")
+
+    existing = {row.id for row in rows}
+    if set(requested) != existing:
+        raise ValidationError(
+            f"{label}_ids must list every {label} of this project exactly once."
+        )
+    return requested
+
+
+def reorder_subjects(project: Project, subject_ids) -> list[Subject]:
+    """被採点者の並び順を一括で保存する(DRAFT限定)。"""
+    _require_draft(project)
+    rows = _subjects_in_order(project.id)
+    ordered_ids = _validate_reorder_ids(subject_ids, rows, label="subject")
+
+    by_id = {row.id: row for row in rows}
+    _normalize_sort_order([by_id[subject_id] for subject_id in ordered_ids])
+    db.session.commit()
+    return _subjects_in_order(project.id)
+
+
+def reorder_scorers(project: Project, scorer_ids) -> list[Scorer]:
+    """採点者の並び順(座席順)を一括で保存する(DRAFT限定)。
+
+    対象は active な採点者のみ。is_host_scorer は順序に一切影響しない。
+    """
+    _require_draft(project)
+    rows = _active_scorers_in_order(project.id)
+    ordered_ids = _validate_reorder_ids(scorer_ids, rows, label="scorer")
+
+    by_id = {row.id: row for row in rows}
+    _normalize_sort_order([by_id[scorer_id] for scorer_id in ordered_ids])
+    db.session.commit()
+    return _active_scorers_in_order(project.id)
+
+
+# ---------------------------------------------------------------------------
 # コード再発行(DRAFT限定ではなく常時可能)
 # ---------------------------------------------------------------------------
 
