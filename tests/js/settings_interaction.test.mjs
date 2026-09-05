@@ -23,6 +23,9 @@ const ELEMENT_IDS = [
   "saveHostScorerButton", "hostScorerEmptyNote", "projectNameForm", "addSubjectForm",
   "addScorerForm", "regenerateHostCodeButton", "newHostCodeBox", "newHostCodeText",
   "copyNewHostCodeButton", "messageBox",
+  // Phase 10B-3: 並び替え
+  "subjectOrderNote", "subjectOrderActions", "saveSubjectOrderButton", "subjectOrderDirty",
+  "scorerOrderActions", "saveScorerOrderButton", "scorerOrderDirty",
 ];
 
 class El {
@@ -56,8 +59,20 @@ class El {
   async fire(t, ev = {}) {
     for (const fn of this.listeners[t] || []) await fn({ preventDefault() {}, ...ev });
   }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
   toggleAttribute(k, force) { if (force) this.attrs[k] = ""; else delete this.attrs[k]; }
-  buttons() { return this.children.filter((c) => c.tagName === "BUTTON"); }
+  /** 直下と1段ネスト(order-buttons 等)の button を集める。 */
+  buttons() {
+    const found = [];
+    for (const child of this.children) {
+      if (child.tagName === "BUTTON") found.push(child);
+      else for (const g of child.children) if (g.tagName === "BUTTON") found.push(g);
+    }
+    return found;
+  }
+  /** 行の直下にある button だけ(並び替えの ↑↓ は含めない)。 */
+  ownButtons() { return this.children.filter((c) => c.tagName === "BUTTON"); }
   button(label) { return this.buttons().find((b) => b.textContent === label); }
 }
 
@@ -74,12 +89,23 @@ function baseProject() {
 }
 
 /** host_settings.js を新しいDOMスタブ上で起動する。 */
-async function boot({ failDelete = false } = {}) {
+async function boot({ failDelete = false, subjects, scorers, status } = {}) {
   const ids = {};
   ELEMENT_IDS.forEach((id) => { ids[id] = new El(id.includes("Select") ? "select" : "div"); });
   const calls = [];
   const toasts = [];
+  const bodies = [];
   let state = baseProject();
+  if (subjects) {
+    state.subjects = subjects.map((name, i) => ({ id: 100 + i, name, sort_order: i }));
+  }
+  if (scorers) {
+    state.scorers = scorers.map((name, i) => ({
+      id: 200 + i, display_name: name, is_host_scorer: false, is_active: true,
+    }));
+    state.allow_host_scoring = false;
+  }
+  if (status) state.status = status;
 
   globalThis.document = {
     getElementById: (id) => ids[id] ?? null,
@@ -95,6 +121,7 @@ async function boot({ failDelete = false } = {}) {
   globalThis.apiFetch = async (url, opts = {}) => {
     const method = opts.method || "GET";
     calls.push(`${method} ${url}`);
+    if (opts.body) bodies.push({ url, body: JSON.parse(opts.body) });
     if (method === "DELETE") {
       if (failDelete) { const e = new Error("削除できませんでした"); e.status = 409; throw e; }
       const id = Number(url.split("/").pop());
@@ -109,7 +136,7 @@ async function boot({ failDelete = false } = {}) {
   // eslint-disable-next-line no-eval
   eval(fs.readFileSync(SETTINGS_JS, "utf8"));
   await settle();
-  return { ids, calls, toasts, state: () => state };
+  return { ids, calls, toasts, bodies, state: () => state };
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -261,8 +288,8 @@ test("controls are locked while a mutation is in flight and released after", asy
 
 test("scorer and subject rows say 名前を更新, not 保存", async () => {
   const { ids } = await boot();
-  const scorerLabels = ids.scorerRows.children[0].buttons().map((b) => b.textContent);
-  const subjectLabels = ids.subjectRows.children[0].buttons().map((b) => b.textContent);
+  const scorerLabels = ids.scorerRows.children[0].ownButtons().map((b) => b.textContent);
+  const subjectLabels = ids.subjectRows.children[0].ownButtons().map((b) => b.textContent);
 
   assert.deepEqual(scorerLabels, ["名前を更新", "削除", "コード再発行"]);
   assert.deepEqual(subjectLabels, ["名前を更新", "削除"]);
@@ -315,4 +342,108 @@ test("delete stays clickable regardless of the dirty state", async () => {
   const row = ids.scorerRows.children[0];
   assert.equal(row.button("削除").disabled, false);
   assert.equal(row.button("コード再発行").disabled, false);
+});
+
+/* --------------------------------------------------------------------------
+   Phase 10B-3: 並び替え UI
+   ↑↓ を一級の操作手段にし、drag は補助。保存は一括 PATCH。
+   -------------------------------------------------------------------------- */
+
+const rowNames = (container) =>
+  container.children.map((row) => {
+    const input = row.children.find((c) => c.tagName === "INPUT");
+    return input ? input.value : null;
+  });
+
+const orderButtons = (row) => {
+  const group = row.children.find((c) => c._classes.has("order-buttons"));
+  return {
+    up: group.children.find((b) => b.textContent === "↑"),
+    down: group.children.find((b) => b.textContent === "↓"),
+  };
+};
+
+test("every draft row gets up/down controls and a drag handle", async () => {
+  const { ids } = await boot();
+  for (const container of [ids.subjectRows, ids.scorerRows]) {
+    for (const row of container.children) {
+      const { up, down } = orderButtons(row);
+      assert.ok(up && down);
+      assert.equal(up.type, "button");
+      assert.equal(down.type, "button");
+      assert.equal(row.draggable, true, "drag は補助として有効");
+      assert.ok(row.children.some((c) => c._classes.has("drag-handle")));
+    }
+  }
+});
+
+test("the first up and the last down are disabled", async () => {
+  const { ids } = await boot({ subjects: ["A", "B", "C"] });
+  const rows = ids.subjectRows.children;
+  assert.equal(orderButtons(rows[0]).up.disabled, true);
+  assert.equal(orderButtons(rows[0]).down.disabled, false);
+  assert.equal(orderButtons(rows[rows.length - 1]).down.disabled, true);
+});
+
+test("the down button moves a row one place later", async () => {
+  const { ids } = await boot({ subjects: ["A", "B", "C"] });
+  assert.deepEqual(rowNames(ids.subjectRows), ["A", "B", "C"]);
+  await orderButtons(ids.subjectRows.children[0]).down.fire("click");
+  assert.deepEqual(rowNames(ids.subjectRows), ["B", "A", "C"]);
+});
+
+test("the up button moves a row one place earlier", async () => {
+  const { ids } = await boot({ subjects: ["A", "B", "C"] });
+  await orderButtons(ids.subjectRows.children[2]).up.fire("click");
+  assert.deepEqual(rowNames(ids.subjectRows), ["A", "C", "B"]);
+});
+
+test("reordering is local until saved", async () => {
+  const { ids, calls } = await boot({ subjects: ["A", "B", "C"] });
+  await orderButtons(ids.subjectRows.children[0]).down.fire("click");
+
+  // まだ PATCH していない
+  assert.ok(!calls.some((c) => c.includes("/subjects/order")));
+  assert.equal(ids.saveSubjectOrderButton.disabled, false, "保存ボタンが押せる");
+  assert.match(ids.subjectOrderDirty.textContent, /未保存/);
+});
+
+test("the save button is disabled while the order is unchanged", async () => {
+  const { ids } = await boot({ subjects: ["A", "B", "C"] });
+  assert.equal(ids.saveSubjectOrderButton.disabled, true);
+  assert.equal(ids.subjectOrderDirty.textContent, "");
+});
+
+test("saving sends one bulk PATCH with the whole order", async () => {
+  const { ids, calls, bodies } = await boot({ subjects: ["A", "B", "C"] });
+  await orderButtons(ids.subjectRows.children[0]).down.fire("click");
+  await ids.saveSubjectOrderButton.fire("click");
+  await settle();
+
+  const patches = calls.filter((c) => c.includes("/subjects/order"));
+  assert.equal(patches.length, 1, "1リクエストにまとめる");
+  const sent = bodies.find((b) => b.url.includes("/subjects/order"));
+  assert.equal(sent.body.subject_ids.length, 3, "全件を送る");
+});
+
+test("scorer rows reorder and save independently", async () => {
+  const { ids, calls } = await boot({ scorers: ["吉田", "田中", "佐藤"] });
+  await orderButtons(ids.scorerRows.children[2]).up.fire("click");
+  assert.deepEqual(rowNames(ids.scorerRows), ["吉田", "佐藤", "田中"]);
+
+  await ids.saveScorerOrderButton.fire("click");
+  await settle();
+  assert.equal(calls.filter((c) => c.includes("/scorers/order")).length, 1);
+  assert.ok(!calls.some((c) => c.includes("/subjects/order")), "被採点者は触らない");
+});
+
+test("reorder controls disappear once scoring has started", async () => {
+  const { ids } = await boot({ status: "SCORING" });
+  assert.equal(ids.subjectOrderActions.hidden, true);
+  assert.equal(ids.scorerOrderActions.hidden, true);
+  for (const row of ids.subjectRows.children) {
+    assert.ok(!row.children.some((c) => c._classes.has("order-buttons")),
+      "DRAFT以外では並び替えの操作を出さない");
+    assert.notEqual(row.draggable, true);
+  }
 });

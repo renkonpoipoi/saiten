@@ -166,6 +166,24 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--lin
 .hidden { display: none !important; }
 
 .progress-grid { display: grid; gap: 12px; }
+
+/* 並び替え行。↑↓ を一級の操作手段にし、PCではdragも使えるようにする。
+   drag が使えない環境(キーボード操作・スマホ)でも ↑↓ だけで完結する。 */
+.reorder-row { cursor: default; }
+.reorder-row[draggable="true"] .drag-handle { cursor: grab; }
+.reorder-row.drag-over { border-color: var(--gold); }
+.reorder-row.dragging { opacity: .5; }
+.drag-handle {
+  color: var(--muted);
+  user-select: none;
+  padding: 0 4px;
+}
+.order-buttons { display: flex; gap: 4px; }
+.order-buttons button {
+  padding: 6px 10px;
+  line-height: 1;
+  min-width: 2.5em;
+}
 .progress-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
 
 @media (max-width: 640px) {

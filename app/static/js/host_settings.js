@@ -95,6 +95,101 @@
     renderHostScorer(isDraft, editable);
   }
 
+  // ---------------------------------------------------------------------------
+  // 並び替え
+  //
+  // ↑↓ が一級の操作手段(キーボードでもスマホでも確実に動く)。その上に
+  // 標準の HTML5 drag & drop を上乗せする。外部ライブラリは使わない。
+  // 並び替えは client 側の配列で行い、「並び順を保存」で一括 PATCH する。
+  // ---------------------------------------------------------------------------
+
+  // 保存前のローカルな並び順(id の配列)。null = サーバーの順と同じ。
+  let subjectOrder = null;
+  let scorerOrder = null;
+
+  function moveItem(ids, index, delta) {
+    const next = index + delta;
+    if (next < 0 || next >= ids.length) return ids;
+    const moved = ids.slice();
+    [moved[index], moved[next]] = [moved[next], moved[index]];
+    return moved;
+  }
+
+  function moveTo(ids, fromIndex, toIndex) {
+    if (fromIndex === toIndex) return ids;
+    const moved = ids.slice();
+    const [item] = moved.splice(fromIndex, 1);
+    moved.splice(toIndex, 0, item);
+    return moved;
+  }
+
+  function sameOrder(a, b) {
+    return a.length === b.length && a.every((value, index) => value === b[index]);
+  }
+
+  /** 1行に並び替えの操作をまとめて付ける。 */
+  function attachReorder(row, { ids, index, editable, onChange }) {
+    const handle = document.createElement("span");
+    handle.className = "drag-handle";
+    handle.textContent = "⠿";
+    handle.setAttribute("aria-hidden", "true");
+    row.prepend(handle);
+
+    const buttons = document.createElement("span");
+    buttons.className = "order-buttons";
+    const up = document.createElement("button");
+    up.type = "button";
+    up.textContent = "↑";
+    up.title = "1つ上へ";
+    up.setAttribute("aria-label", "1つ上へ移動");
+    up.disabled = !editable || index === 0;
+    up.addEventListener("click", () => onChange(moveItem(ids, index, -1)));
+
+    const down = document.createElement("button");
+    down.type = "button";
+    down.textContent = "↓";
+    down.title = "1つ下へ";
+    down.setAttribute("aria-label", "1つ下へ移動");
+    down.disabled = !editable || index === ids.length - 1;
+    down.addEventListener("click", () => onChange(moveItem(ids, index, 1)));
+
+    buttons.append(up, down);
+    row.appendChild(buttons);
+
+    // drag は補助。使えない環境でも ↑↓ だけで完結する。
+    if (!editable) return;
+    row.draggable = true;
+    row.addEventListener("dragstart", (event) => {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", String(index));
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => row.classList.remove("dragging"));
+    row.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+    row.addEventListener("drop", (event) => {
+      event.preventDefault();
+      row.classList.remove("drag-over");
+      const from = Number(event.dataTransfer.getData("text/plain"));
+      if (Number.isNaN(from)) return;
+      onChange(moveTo(ids, from, index));
+    });
+  }
+
+  function renderOrderActions(kind, localIds, serverIds, editable) {
+    const actions = document.getElementById(`${kind}OrderActions`);
+    const dirty = document.getElementById(`${kind}OrderDirty`);
+    const changed = !sameOrder(localIds, serverIds);
+    actions.classList.toggle("hidden", !editable);
+    document.getElementById(
+      kind === "subject" ? "saveSubjectOrderButton" : "saveScorerOrderButton"
+    ).disabled = !editable || !changed;
+    dirty.textContent = changed ? "未保存の並び順があります" : "";
+  }
+
   /** 既存の名前を編集して確定するボタン。
    *
    * 新規追加は「追加」を押した時点で保存されるので、この操作は
@@ -119,9 +214,19 @@
   function renderSubjects(isDraft, editable) {
     const container = document.getElementById("subjectRows");
     container.innerHTML = "";
-    project.subjects.forEach((subject) => {
+
+    const serverIds = project.subjects.map((s) => s.id);
+    if (subjectOrder === null) subjectOrder = serverIds.slice();
+    // 追加・削除でサーバー側の集合が変わったらローカル順を作り直す
+    if (!sameOrder(subjectOrder.slice().sort(), serverIds.slice().sort())) {
+      subjectOrder = serverIds.slice();
+    }
+    const byId = new Map(project.subjects.map((s) => [s.id, s]));
+    const ordered = subjectOrder.map((id) => byId.get(id));
+
+    ordered.forEach((subject, index) => {
       const row = document.createElement("div");
-      row.className = "progress-row";
+      row.className = "progress-row reorder-row";
       const input = document.createElement("input");
       input.type = "text";
       input.value = subject.name;
@@ -153,9 +258,29 @@
         });
         row.append(updateButton, deleteButton);
       }
+      if (isDraft) {
+        attachReorder(row, {
+          ids: subjectOrder, index, editable,
+          onChange: (next) => { subjectOrder = next; render(); },
+        });
+      }
       container.appendChild(row);
     });
+
+    renderOrderActions("subject", subjectOrder, serverIds, editable);
   }
+
+  document.getElementById("saveSubjectOrderButton").addEventListener("click", () => {
+    const ids = subjectOrder.slice();
+    mutate(async () => {
+      await apiFetch(`/api/projects/${projectId}/subjects/order`, {
+        method: "PATCH",
+        body: JSON.stringify({ subject_ids: ids }),
+      });
+      subjectOrder = null;          // サーバーの順で作り直す
+      showMessage("並び順を保存しました");
+    });
+  });
 
   function renderCriteria(isDraft, editable) {
     const container = document.getElementById("criterionRows");
@@ -250,9 +375,19 @@
   function renderScorers(isDraft, editable) {
     const container = document.getElementById("scorerRows");
     container.innerHTML = "";
-    project.scorers.forEach((scorer) => {
+
+    const active = project.scorers.filter((s) => s.is_active);
+    const serverIds = active.map((s) => s.id);
+    if (scorerOrder === null) scorerOrder = serverIds.slice();
+    if (!sameOrder(scorerOrder.slice().sort(), serverIds.slice().sort())) {
+      scorerOrder = serverIds.slice();
+    }
+    const byId = new Map(active.map((s) => [s.id, s]));
+    const ordered = scorerOrder.map((id) => byId.get(id));
+
+    ordered.forEach((scorer, index) => {
       const row = document.createElement("div");
-      row.className = "progress-row";
+      row.className = "progress-row reorder-row";
       const input = document.createElement("input");
       input.type = "text";
       input.value = scorer.display_name;
@@ -307,8 +442,16 @@
       });
       row.appendChild(regenButton);
 
+      if (isDraft) {
+        attachReorder(row, {
+          ids: scorerOrder, index, editable,
+          onChange: (next) => { scorerOrder = next; render(); },
+        });
+      }
       container.appendChild(row);
     });
+
+    renderOrderActions("scorer", scorerOrder, serverIds, editable);
 
     // コード再発行の結果は render() のたびに消えてしまうので、
     // 直近の1件だけ保持して描画後に差し込む。
@@ -316,6 +459,18 @@
       showNewScorerCode(pendingScorerCode.displayName, pendingScorerCode.code);
     }
   }
+
+  document.getElementById("saveScorerOrderButton").addEventListener("click", () => {
+    const ids = scorerOrder.slice();
+    mutate(async () => {
+      await apiFetch(`/api/projects/${projectId}/scorers/order`, {
+        method: "PATCH",
+        body: JSON.stringify({ scorer_ids: ids }),
+      });
+      scorerOrder = null;
+      showMessage("並び順を保存しました");
+    });
+  });
 
   let pendingScorerCode = null;
 

@@ -10,6 +10,7 @@ IntegrityError になる。service 側の2段階代入がそれを回避して�
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from app.models import Project, Scorer, Subject
@@ -449,3 +450,71 @@ def test_normalization_uses_two_phase_assignment():
     flush = body.index("db.session.flush()")
     final = body.index("row.sort_order = index")
     assert park < flush < final
+
+
+# ---------------------------------------------------------------------------
+# Phase 10B-3: Host Settings の並び替え UI
+#
+# 実際に host_settings.js を DOM スタブ上で走らせる検証は
+# tests/js/settings_interaction.test.mjs にあり、pytest からも実行される。
+# ここでは DOM 契約と、外部ライブラリを増やしていないことを固定する。
+# ---------------------------------------------------------------------------
+
+JS_DIR = APP_DIR / "static" / "js"
+
+
+def _settings_js() -> str:
+    return (JS_DIR / "host_settings.js").read_text(encoding="utf-8")
+
+
+def test_settings_has_reorder_controls(client, db):
+    created = _create(client)
+    html = client.get(f"/host/{created['project_id']}/settings").get_data(as_text=True)
+    for element_id in (
+        "subjectOrderActions", "saveSubjectOrderButton", "subjectOrderDirty",
+        "scorerOrderActions", "saveScorerOrderButton", "scorerOrderDirty",
+    ):
+        assert f'id="{element_id}"' in html, element_id
+
+
+def test_reorder_uses_up_down_as_the_primary_control():
+    """★ ↑↓ が一級の操作手段で、drag は補助であること。"""
+    js = _settings_js()
+    body = js[js.index("function attachReorder("):]
+    body = body[: body.index("\n  }")]
+
+    assert '"↑"' in body and '"↓"' in body
+    assert 'up.type = "button"' in body and 'down.type = "button"' in body
+    # 端では無効化する
+    assert "index === 0" in body
+    assert "index === ids.length - 1" in body
+    # アクセシビリティ
+    assert 'setAttribute("aria-label"' in body
+    # drag はそのあとに足す補助
+    assert body.index('"↑"') < body.index("dragstart")
+
+
+def test_reorder_adds_no_external_library(client, db):
+    """build step なしの Vanilla JS を維持していること。"""
+    html = client.get(f"/host/{_create(client)['project_id']}/settings").get_data(as_text=True)
+    for src in re.findall(r'<script[^>]*src="([^"]+)"', html):
+        assert src.startswith("/static/"), src
+
+    package_json = Path(__file__).resolve().parent.parent / "package.json"
+    assert not package_json.exists(), "依存を増やしていないこと"
+
+
+def test_reorder_saves_in_one_bulk_request():
+    """1件ずつの swap API を叩かず、一括 PATCH で保存すること。"""
+    js = _settings_js()
+    assert js.count("/subjects/order") == 1
+    assert js.count("/scorers/order") == 1
+    assert "subject_ids: ids" in js
+    assert "scorer_ids: ids" in js
+
+
+def test_reorder_is_hidden_outside_draft():
+    js = _settings_js()
+    body = js[js.index("function renderOrderActions("):]
+    body = body[: body.index("\n  }")]
+    assert 'classList.toggle("hidden", !editable)' in body

@@ -26,7 +26,12 @@
 
 <section class="panel">
   <h2>被採点者</h2>
+  <p id="subjectOrderNote" style="color:var(--muted); font-size:.85rem;"></p>
   <div id="subjectRows" class="progress-grid"></div>
+  <p id="subjectOrderActions" class="hidden" style="margin-top:12px;">
+    <button type="button" id="saveSubjectOrderButton" class="primary">並び順を保存</button>
+    <span id="subjectOrderDirty" style="color:var(--gold); font-size:.85rem; margin-left:8px;"></span>
+  </p>
   <form id="addSubjectForm" style="margin-top:12px; display:flex; gap:8px;">
     <input type="text" id="newSubjectName" placeholder="新しい被採点者名">
     <button type="submit" id="addSubjectButton">追加</button>
@@ -40,7 +45,14 @@
 
 <section class="panel">
   <h2>採点者</h2>
+  <p style="color:var(--muted); font-size:.85rem;">
+    本番の座席順に並べ替えると、その順に得点が開示されます。
+  </p>
   <div id="scorerRows" class="progress-grid"></div>
+  <p id="scorerOrderActions" class="hidden" style="margin-top:12px;">
+    <button type="button" id="saveScorerOrderButton" class="primary">並び順を保存</button>
+    <span id="scorerOrderDirty" style="color:var(--gold); font-size:.85rem; margin-left:8px;"></span>
+  </p>
   <form id="addScorerForm" style="margin-top:12px; display:flex; gap:8px;">
     <input type="text" id="newScorerName" placeholder="新しい採点者名">
     <button type="submit" id="addScorerButton">追加</button>
