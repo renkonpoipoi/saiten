@@ -61,6 +61,39 @@ def _resolve_host_scorer_index(raw_index, scorer_count: int) -> int:
     return raw_index
 
 
+def _normalize_sort_order(rows: list) -> None:
+    """並び順を 0..N-1 の連番へ詰め直す(rows は既に希望順に並んでいること)。
+
+    **2段階で代入する。** subjects には UNIQUE(project_id, sort_order) があり、
+    素直に代入すると途中で必ず既存値と衝突して IntegrityError になる。
+    一旦衝突しない負値へ退避して flush() し、そのあと最終値を入れる。
+    scorers には現状この制約が無いが、扱いを揃えておく。
+    """
+    if not rows:
+        return
+    for index, row in enumerate(rows):
+        row.sort_order = -(index + 1)
+    db.session.flush()
+    for index, row in enumerate(rows):
+        row.sort_order = index
+
+
+def _active_scorers_in_order(project_id: int) -> list[Scorer]:
+    return (
+        Scorer.query.filter_by(project_id=project_id, is_active=True)
+        .order_by(Scorer.sort_order, Scorer.id)
+        .all()
+    )
+
+
+def _subjects_in_order(project_id: int) -> list[Subject]:
+    return (
+        Subject.query.filter_by(project_id=project_id)
+        .order_by(Subject.sort_order, Subject.id)
+        .all()
+    )
+
+
 def _require_draft(project: Project) -> None:
     if project.status != "DRAFT":
         raise ProjectStateError(
@@ -164,6 +197,8 @@ def create_project(
             display_name=scorer_name,
             access_code_hash=hash_code(code),
             is_host_scorer=is_host_scorer,
+            # 入力された採点者の順をそのまま初期の並び順にする
+            sort_order=index,
         )
         db.session.add(scorer)
         db.session.flush()
@@ -212,6 +247,8 @@ def add_subject(project: Project, name: str) -> Subject:
         project_id=project.id, name=name, sort_order=(max_order + 1) if max_order is not None else 0
     )
     db.session.add(subject)
+    db.session.flush()
+    _normalize_sort_order(_subjects_in_order(project.id))
     db.session.commit()
     return subject
 
@@ -231,6 +268,9 @@ def delete_subject(project: Project, subject: Subject) -> None:
     _require_draft(project)
     _require_owned(project, subject, label="Subject")
     db.session.delete(subject)
+    db.session.flush()
+    # 残った被採点者を 0..N-1 へ詰め直す(gapを残さない)
+    _normalize_sort_order(_subjects_in_order(project.id))
     db.session.commit()
 
 
@@ -252,10 +292,21 @@ def add_scorer(project: Project, display_name: str) -> tuple[Scorer, str]:
     if not display_name:
         raise ValidationError("Scorer name is required.")
     code = generate_scorer_code()
+    max_order = (
+        db.session.query(func.max(Scorer.sort_order))
+        .filter_by(project_id=project.id, is_active=True)
+        .scalar()
+    )
     scorer = Scorer(
-        project_id=project.id, display_name=display_name, access_code_hash=hash_code(code)
+        project_id=project.id,
+        display_name=display_name,
+        access_code_hash=hash_code(code),
+        # 新しい採点者は末尾へ。そのあと 0..N-1 へ詰め直す。
+        sort_order=(max_order + 1) if max_order is not None else 0,
     )
     db.session.add(scorer)
+    db.session.flush()
+    _normalize_sort_order(_active_scorers_in_order(project.id))
     db.session.commit()
     return scorer, code
 
@@ -280,6 +331,9 @@ def delete_scorer(project: Project, scorer: Scorer) -> None:
     if scorer.is_host_scorer:
         project.allow_host_scoring = False
     db.session.delete(scorer)
+    db.session.flush()
+    # 残った採点者を 0..N-1 へ詰め直す(gapを残さない)
+    _normalize_sort_order(_active_scorers_in_order(project.id))
     db.session.commit()
 
 
@@ -727,7 +781,11 @@ def build_presentation_state(project: Project) -> dict:
 
 def get_progress(project: Project) -> dict:
     subjects = Subject.query.filter_by(project_id=project.id).order_by(Subject.sort_order).all()
-    scorers = Scorer.query.filter_by(project_id=project.id, is_active=True).order_by(Scorer.id).all()
+    scorers = (
+        Scorer.query.filter_by(project_id=project.id, is_active=True)
+        .order_by(Scorer.sort_order, Scorer.id)
+        .all()
+    )
 
     eligible_ids = eligible_scorer_ids(project.id) if subjects else set()
 

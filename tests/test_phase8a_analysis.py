@@ -131,9 +131,14 @@ def test_judge_totals_are_ordered_deterministically(client, app, db):
 
 
 def test_result_service_orders_evaluations_explicitly():
-    """DB返却順に依存しないよう、明示的なORDER BYがあること。"""
+    """DB返却順に依存しないよう、明示的なORDER BYがあること。
+
+    Phase 10B で並び順の根拠が Evaluation.scorer_id(作成順)から
+    Scorer.sort_order(Hostが決めた座席順)へ移った。id へのフォールバックが
+    あるので、既存Project(全員 sort_order=0)は従来と同じ作成順になる。
+    """
     source = (APP_DIR / "services" / "result_service.py").read_text(encoding="utf-8")
-    assert "order_by(Evaluation.scorer_id)" in source
+    assert "order_by(Scorer.sort_order, Scorer.id)" in source
 
 
 # ---------------------------------------------------------------------------

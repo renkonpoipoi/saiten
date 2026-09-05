@@ -45,7 +45,7 @@ ENV_PY = REPO_ROOT / "migrations" / "env.py"
 PHASE8_REVISION = "9c4e17a2b8d3"
 # `flask db upgrade` は常に head まで進む。ここで見たいのは
 # 「どちらのDBへ書いたか」であって head revision 値そのものではない。
-HEAD_REVISION = "c1f7a04b9e26"
+HEAD_REVISION = "d5b81c37f0ae"
 
 # 親プロセス(開発者のshell)には本番Neonの接続文字列が入っている場合がある。
 # subprocessへ絶対に継承させない。

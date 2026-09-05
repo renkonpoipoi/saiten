@@ -63,10 +63,12 @@ def _load_score_index(project: Project) -> _ScoreIndex:
             Evaluation.project_id == project.id,
             Evaluation.status == "submitted",
         )
-        # judge開示順を決定的にするため明示的に並べる。Scorerにsort_orderが無いので
-        # 採番順(=作成順)であるscorer_idを使う。これが無いとDBの返却順に依存して
-        # 実行環境ごとにReveal順が変わりうる。
-        .order_by(Evaluation.scorer_id)
+        # judge開示順を決定的にするため明示的に並べる。Hostが決めた採点者の
+        # 並び順(座席順)をそのまま得点開示順にしたいので Scorer.sort_order を使う。
+        # 既存Projectは全員 sort_order=0 なので id へフォールバックし、
+        # Phase 10B以前と同じ「作成順」になる。
+        .join(Scorer, Scorer.id == Evaluation.scorer_id)
+        .order_by(Scorer.sort_order, Scorer.id)
         .all()
     )
     if not evaluations:

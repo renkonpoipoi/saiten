@@ -30,7 +30,7 @@ INITIAL_REVISION = "b37d61517847"
 PHASE8_REVISION = "9c4e17a2b8d3"
 # `flask db upgrade` は常に head まで進む。Phase 10A-5 で
 # c1f7a04b9e26 (部分UNIQUE INDEX) が後続revisionとして追加された。
-HEAD_REVISION = "c1f7a04b9e26"
+HEAD_REVISION = "d5b81c37f0ae"
 
 # Neon本番へ適用済みのinitial migrationは、いかなる理由でも書き換えてはならない。
 # 変更されるとNeonのalembic_versionと実schemaの対応が崩れる。
@@ -99,6 +99,7 @@ def test_migration_chain_is_append_only():
         "b37d61517847_initial_schema.py",
         # Phase 10A-5。検証は tests/test_phase10a_migration.py。
         "c1f7a04b9e26_enforce_one_host_scorer_per_project.py",
+        "d5b81c37f0ae_add_ordering_and_draw_columns.py",
     ]
 
 

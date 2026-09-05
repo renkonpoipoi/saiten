@@ -569,6 +569,7 @@ def test_no_new_migrations_were_added_in_phase9():
         # Phase 10A-5 で追加した部分UNIQUE INDEX(expand-only)。
         # 検証は tests/test_phase10a_migration.py で行う。
         "c1f7a04b9e26_enforce_one_host_scorer_per_project.py",
+        "d5b81c37f0ae_add_ordering_and_draw_columns.py",
     ], revisions
 
 

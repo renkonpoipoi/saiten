@@ -49,7 +49,11 @@ def _get_criterion_or_404(criterion_id: int) -> Criterion:
 def _serialize_project_detail(project: Project) -> dict:
     subjects = Subject.query.filter_by(project_id=project.id).order_by(Subject.sort_order).all()
     criteria = Criterion.query.filter_by(project_id=project.id).order_by(Criterion.sort_order).all()
-    scorers = Scorer.query.filter_by(project_id=project.id).order_by(Scorer.id).all()
+    scorers = (
+        Scorer.query.filter_by(project_id=project.id)
+        .order_by(Scorer.sort_order, Scorer.id)
+        .all()
+    )
     return {
         "id": project.id,
         "name": project.name,

@@ -153,6 +153,8 @@ def test_phase10a_revision_extends_the_existing_chain():
         "9c4e17a2b8d3_add_presentation_modes.py",
         "b37d61517847_initial_schema.py",
         "c1f7a04b9e26_enforce_one_host_scorer_per_project.py",
+        # Phase 10B-1。検証は tests/test_phase10b_migration.py。
+        "d5b81c37f0ae_add_ordering_and_draw_columns.py",
     ], revisions
 
     source = (
@@ -210,7 +212,7 @@ def test_upgrade_creates_the_partial_unique_index(legacy_db):
     path, env = legacy_db
     assert _index_sql(path) is None
 
-    _run_ok(env, "upgrade")
+    _run_ok(env, "upgrade", PHASE10A_REVISION)
 
     assert _alembic_version(path) == PHASE10A_REVISION
     sql = _index_sql(path)
@@ -359,7 +361,7 @@ def test_upgrade_downgrade_upgrade_is_repeatable(legacy_db):
 
     _run_ok(env, "upgrade")
     _run_ok(env, "downgrade", PHASE8_REVISION)
-    _run_ok(env, "upgrade")
+    _run_ok(env, "upgrade", PHASE10A_REVISION)
 
     assert _alembic_version(path) == PHASE10A_REVISION
     assert _index_sql(path) is not None

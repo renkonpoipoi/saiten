@@ -41,6 +41,10 @@ class Subject(db.Model):
         default="WAITING",
         server_default=text("'WAITING'"),
     )
+    # RANDOM_DRAW時の秘密順(0..N-1)。MANUALでは常にNULL。
+    # **抽選前のclientへ絶対に返さない。** 公開済み判定は
+    # draw_order < Project.draw_cursor で行う。
+    draw_order = db.Column(db.Integer, nullable=True)
     created_at = db.Column(
         db.DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
     )
@@ -49,6 +53,9 @@ class Subject(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint("project_id", "sort_order", name="ux_subjects_project_order"),
+        # 秘密順に重複が生じないようにする。NULLは何件でも許されるので、
+        # MANUAL(全件NULL)のProjectとも共存する。
+        db.Index("ux_subjects_project_draw", "project_id", "draw_order", unique=True),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

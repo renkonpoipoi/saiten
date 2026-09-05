@@ -95,7 +95,7 @@ def host_scoring_entry(project_id: int):
         Scorer.query.filter_by(
             project_id=project.id, is_host_scorer=True, is_active=True
         )
-        .order_by(Scorer.id)
+        .order_by(Scorer.sort_order, Scorer.id)
         .first()
     )
     if scorer is None:

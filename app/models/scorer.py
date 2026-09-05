@@ -25,6 +25,10 @@ class Scorer(db.Model):
     is_host_scorer = db.Column(
         db.Boolean, nullable=False, default=False, server_default=false()
     )
+    # 本番の座席順など、Hostが決める並び順。Judge rail / 得点開示順の根拠になる。
+    # 既存Projectはmigrationで全員0になるため、読み出しは必ず
+    # (sort_order, id) で並べる。0で並んだ場合はid順=従来の作成順に一致する。
+    sort_order = db.Column(db.Integer, nullable=False, default=0, server_default=text("0"))
     is_active = db.Column(db.Boolean, nullable=False, default=True, server_default=true())
     created_at = db.Column(
         db.DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
