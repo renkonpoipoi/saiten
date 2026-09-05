@@ -339,3 +339,80 @@ test("timingCssVars emits only ms values on custom property names", () => {
     assert.match(value, /^\d+ms$/, `${name}=${value}`);
   }
 });
+
+/* --------------------------------------------------------------------------
+   Phase 10B: 発表順の抽選演出
+   演出は「切り替えて止まる」だけで、**結果を決めない**ことを固定する。
+   -------------------------------------------------------------------------- */
+
+test("buildDrawSteps runs intro -> spin -> settle -> result -> complete", () => {
+  assert.deepEqual(phases(core.buildDrawSteps()), [
+    "DRAW_INTRO",
+    "DRAW_SPIN",
+    "DRAW_SETTLE",
+    "DRAW_RESULT",
+    "DRAW_COMPLETE",
+  ]);
+});
+
+test("buildDrawSteps ends on a zero-duration completion step", () => {
+  const steps = core.buildDrawSteps();
+  assert.equal(steps[steps.length - 1].duration, 0);
+  steps.slice(0, -1).forEach((step) => assert.ok(step.duration > 0, step.phase));
+});
+
+test("buildDrawSteps carries no subject, index or result field", () => {
+  // 結果を step 側に埋め込めてしまうと「演出が結果を決める」構造になる。
+  core.buildDrawSteps().forEach((step) => {
+    assert.deepEqual(Object.keys(step).sort(), ["duration", "phase"]);
+  });
+});
+
+test("buildDrawSteps is deterministic and independent of any randomness", () => {
+  assert.deepEqual(core.buildDrawSteps(), core.buildDrawSteps());
+});
+
+test("buildDrawSteps honours an injected timing table", () => {
+  const steps = core.buildDrawSteps({
+    drawIntro: 10,
+    drawSpin: 20,
+    drawSettle: 30,
+    drawHold: 40,
+  });
+  assert.deepEqual(steps.map((s) => s.duration), [10, 20, 30, 40, 0]);
+});
+
+test("drawSpinIntervals slows down and covers the spin duration", () => {
+  const intervals = core.drawSpinIntervals();
+  assert.ok(intervals.length > 1);
+  for (let i = 1; i < intervals.length; i += 1) {
+    assert.ok(intervals[i] >= intervals[i - 1], `interval ${i}`);
+  }
+  const total = intervals.reduce((sum, ms) => sum + ms, 0);
+  assert.ok(total >= core.TIMING.drawSpin);
+});
+
+test("remainingCandidates removes every already drawn subject", () => {
+  assert.deepEqual(
+    core.remainingCandidates(["A", "B", "C", "D"], ["C", "A"]),
+    ["B", "D"]
+  );
+});
+
+test("remainingCandidates keeps every subject before the first draw", () => {
+  assert.deepEqual(core.remainingCandidates(["A", "B", "C"], []), ["A", "B", "C"]);
+});
+
+test("remainingCandidates returns nothing once all subjects are drawn", () => {
+  assert.deepEqual(core.remainingCandidates(["A", "B"], ["B", "A"]), []);
+});
+
+test("remainingCandidates preserves the display order it was given", () => {
+  // 候補の並びが秘密順に見えてはいけないので、渡された順(sort_order)を保つ
+  assert.deepEqual(core.remainingCandidates(["D", "C", "B", "A"], ["C"]), ["D", "B", "A"]);
+});
+
+test("remainingCandidates tolerates missing arguments", () => {
+  assert.deepEqual(core.remainingCandidates(), []);
+  assert.deepEqual(core.remainingCandidates(["A"], undefined), ["A"]);
+});

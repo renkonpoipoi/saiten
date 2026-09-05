@@ -31,6 +31,12 @@
     finalTitle: 800,
     winnerGlow: 1200,
 
+    // 発表順の抽選(Phase 10B)
+    drawIntro: 700,
+    drawSpin: 1800,
+    drawSettle: 500,
+    drawHold: 1600,
+
     // BATCH: Final Ranking Reveal
     finalIntro: 1200,
     quickGroup: 430,
@@ -163,6 +169,43 @@
     return steps;
   }
 
+  /** 抽選演出の1回分。候補の高速切替 -> 減速 -> 結果に着地 -> 少し見せる。
+   *
+   * **切替はあくまで演出**で、着地するのはサーバーが返した1件だけ。
+   * どの候補で止まるかを client の乱数が決めることは無い。
+   */
+  function buildDrawSteps(timing) {
+    var base = timing || TIMING;
+    return [
+      { phase: "DRAW_INTRO", duration: base.drawIntro },
+      { phase: "DRAW_SPIN", duration: base.drawSpin },
+      { phase: "DRAW_SETTLE", duration: base.drawSettle },
+      { phase: "DRAW_RESULT", duration: base.drawHold },
+      { phase: "DRAW_COMPLETE", duration: 0 }
+    ];
+  }
+
+  /** 候補の切替間隔。だんだん遅くする(等間隔だと機械的に見える)。 */
+  function drawSpinIntervals(timing) {
+    var base = timing || TIMING;
+    var intervals = [];
+    var elapsed = 0;
+    var step = 60;
+    while (elapsed < base.drawSpin) {
+      intervals.push(step);
+      elapsed += step;
+      step = Math.round(step * 1.12);
+    }
+    return intervals;
+  }
+
+  /** まだ抽選されていない候補だけを残す。抽選済みを再び候補に出さない。 */
+  function remainingCandidates(allSubjects, drawnNames) {
+    var drawn = {};
+    (drawnNames || []).forEach(function (name) { drawn[name] = true; });
+    return (allSubjects || []).filter(function (name) { return !drawn[name]; });
+  }
+
   /** step配列の総尺(ms)。テストと運用尺の見積りに使う。 */
   function totalDuration(steps) {
     return (steps || []).reduce(function (sum, step) { return sum + step.duration; }, 0);
@@ -268,6 +311,9 @@
     buildSubjectSteps: buildSubjectSteps,
     buildSequentialRankSteps: buildSequentialRankSteps,
     buildBatchFinalSteps: buildBatchFinalSteps,
+    buildDrawSteps: buildDrawSteps,
+    drawSpinIntervals: drawSpinIntervals,
+    remainingCandidates: remainingCandidates,
     totalDuration: totalDuration,
     railLayout: railLayout,
     toRankGroups: toRankGroups,

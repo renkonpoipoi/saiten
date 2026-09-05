@@ -66,6 +66,20 @@ def result_presentation_page(project_id: int):
     return render_template("result_presentation.html", project_id=project_id)
 
 
+@pages_bp.get("/host/<int:project_id>/draw")
+def draw_page(project_id: int):
+    """発表順の抽選をプロジェクターへ出すための専用画面。
+
+    抽選はProject.statusがSCORINGの間に行うが、結果発表画面(/present)は
+    BATCHではLOCKED以降しか使えない設計になっている。責務も状態ゲートも
+    違うので、結果発表とは別のページに分けている。
+
+    他のpage routeと同じくここではguardしない(認可の実体はAPI側で、
+    JSが403を検知してログインへ誘導する)。
+    """
+    return render_template("draw.html", project_id=project_id)
+
+
 @pages_bp.post("/host/<int:project_id>/scoring")
 @require_host
 def host_scoring_entry(project_id: int):

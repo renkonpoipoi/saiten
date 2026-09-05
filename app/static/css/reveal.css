@@ -727,3 +727,87 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------------------------------------------------------------------------
+   14. 発表順の抽選 (Phase 10B)
+   Presentation と同じ token を使い、見た目の言語を揃える。
+   --------------------------------------------------------------------------- */
+.p-draw {
+  position: absolute;
+  min-width: calc(var(--u) * 38);
+  padding: calc(var(--u) * 2.6) calc(var(--u) * 4);
+  border-radius: calc(var(--u) * 1.2);
+  border: 1px solid var(--p-line);
+  background:
+    radial-gradient(ellipse 90% 130% at 50% 50%, rgba(125, 17, 27, .18) 0%, rgba(125, 17, 27, 0) 70%),
+    linear-gradient(180deg, var(--p-panel) 0%, var(--p-panel-deep) 100%);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .18);
+  text-align: center;
+  opacity: 0;
+  transform: scale(.94);
+  transition: opacity 260ms ease-out, transform 260ms cubic-bezier(.22, .61, .36, 1),
+              box-shadow 260ms ease-out, border-color 260ms ease-out;
+}
+
+.p-draw[data-state="spinning"],
+.p-draw[data-state="settling"] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* 結果が確定した瞬間だけ強く光らせる */
+.p-draw[data-state="result"] {
+  opacity: 1;
+  transform: scale(1.04);
+  border-color: var(--p-gold);
+  box-shadow: inset 0 1px 0 rgba(243, 215, 122, .3), var(--p-glow-strong);
+}
+
+.p-draw__name {
+  font-size: calc(var(--u) * 6.4);
+  font-weight: 900;
+  line-height: 1.1;
+  color: var(--p-ivory);
+  overflow-wrap: anywhere;
+}
+
+/* 切替中は少しだけ沈ませ、確定で前に出す */
+.p-draw[data-state="spinning"] .p-draw__name { color: var(--p-sub); }
+
+.p-draw[data-state="result"] .p-draw__name {
+  background: var(--p-gold-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: var(--p-gold-hi);
+  text-shadow: 0 0 calc(var(--u) * 2.4) rgba(243, 215, 122, .4);
+}
+
+@supports (-webkit-text-fill-color: transparent) {
+  .p-draw[data-state="result"] .p-draw__name { -webkit-text-fill-color: transparent; }
+}
+
+/* 抽選済みの履歴。過去は見せてよい。 */
+.p-draw-history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * .8);
+  justify-content: center;
+  width: 88%;
+  margin: 0 auto;
+  padding-bottom: calc(var(--u) * 2.5);
+}
+
+.p-draw-history__item {
+  padding: calc(var(--u) * .6) calc(var(--u) * 1.2);
+  border-radius: calc(var(--u) * .6);
+  border: 1px solid rgba(214, 179, 90, .16);
+  background: var(--p-panel-deep);
+  font-size: calc(var(--u) * 1.4);
+  color: var(--p-sub);
+}
+
+.p-draw-history__item .position {
+  color: var(--p-gold);
+  font-family: var(--p-serif);
+  margin-right: .5em;
+}

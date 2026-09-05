@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}発表順の抽選 - M1風採点アプリ{% endblock %}
+{% block body_class %}presentation-body{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/reveal.css') }}">
+{% endblock %}
+{% block content %}
+<div id="presentationRoot" class="p-root">
+
+{# 抽選できない状態(モード違い・採点中でない・枯渇)のときに出す #}
+<section id="drawUnavailablePanel" class="panel hidden">
+  <h1 id="drawUnavailableTitle">抽選できません</h1>
+  <p id="drawUnavailableText" style="color:var(--muted)"></p>
+  <div class="finished-actions">
+    <a class="button" id="unavailableDashboardLink" href="#">&larr; ホストダッシュボードに戻る</a>
+  </div>
+</section>
+
+<section id="drawStage" class="p-stage hidden" data-phase="idle">
+  <header class="p-stage__head">
+    <div class="p-eyebrow">NEXT PRESENTER</div>
+    <h2 class="p-subject" id="drawProgressLabel">-</h2>
+  </header>
+
+  {# 候補名が高速で切り替わり、サーバーが返した結果に着地する #}
+  <div class="p-center">
+    <div class="p-draw" id="drawCard" data-state="idle">
+      <div class="p-draw__name" id="drawName"></div>
+    </div>
+  </div>
+
+  {# 抽選済みの履歴。過去は見せてよい。 #}
+  <footer class="p-draw-history" id="drawHistory"></footer>
+</section>
+
+{# 1クリック = 1回の抽選。連続で自動抽選はしない。 #}
+<section id="drawControlPanel" class="panel p-prompt hidden">
+  <p id="drawControlNote" style="color:var(--muted)"></p>
+  <button type="button" id="drawButton" class="primary">次の発表者を抽選</button>
+  <a class="button" id="drawDashboardLink" href="#">&larr; ホストダッシュボードに戻る</a>
+</section>
+
+<div id="stageControls" class="p-controls hidden" data-visible="false">
+  <button type="button" id="fullscreenButton">全画面</button>
+  <button type="button" id="skipButton">スキップ</button>
+</div>
+
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>window.PROJECT_ID = {{ project_id }};</script>
+<script src="{{ url_for('static', filename='assets/sfx/manifest.js') }}"></script>
+<script src="{{ url_for('static', filename='js/presentation/core.js') }}"></script>
+<script src="{{ url_for('static', filename='js/presentation/audio.js') }}"></script>
+<script src="{{ url_for('static', filename='js/draw.js') }}"></script>
+{% endblock %}
