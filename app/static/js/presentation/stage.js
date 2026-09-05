@@ -193,6 +193,96 @@
     return card;
   }
 
+  /* -------------------------------------------------------------------------
+     Incoming Score Card (SEQUENTIAL)
+
+     今回の組はランキングの外側に一度出し、確定した順位のslotへ運ぶ。
+     staging中は順位を持たない。**カードに順位を入れる要素が存在しない**ので、
+     「第1位が第3位の下に浮いている」という意味的に不可能な状態を作れない。
+     ------------------------------------------------------------------------- */
+
+  var PLACEHOLDER_SELECTOR = '[data-placeholder="true"]';
+
+  function showIncomingCard(refs, subject) {
+    if (!refs.incomingCard) return;
+    refs.incomingName.textContent = subject.name;
+    refs.incomingScore.textContent = String(subject.total_score);
+    refs.incomingCard.style.transition = "";
+    refs.incomingCard.style.transform = "";
+    refs.incomingCard.dataset.state = "staging";
+  }
+
+  function hideIncomingCard(refs) {
+    if (!refs.incomingCard) return;
+    refs.incomingCard.dataset.state = "idle";
+    refs.incomingCard.style.transition = "";
+    refs.incomingCard.style.transform = "";
+  }
+
+  /** 最終slotの場所取り。**順位ラベルは載せない**(到着まで順位を見せない)。
+      高さを本物のrowと揃えるため、name と score は同じ構造で入れておく。 */
+  function buildPlaceholderRow(subject) {
+    var row = document.createElement("div");
+    row.className = "p-rank-row";
+    row.dataset.subjectId = String(subject.id);
+    row.dataset.placeholder = "true";
+
+    var rank = document.createElement("div");
+    rank.className = "p-rank-row__rank";
+
+    var name = document.createElement("div");
+    name.className = "p-rank-row__name";
+    name.textContent = subject.name;
+
+    var score = document.createElement("div");
+    score.className = "p-rank-row__score";
+    score.textContent = String(subject.total_score);
+
+    row.append(rank, name, score);
+    return row;
+  }
+
+  /** Incoming Card を staging から最終slotへ運ぶ。FLIPと同じ計測方法で、
+      現在位置と着地点の差分だけを transform で埋める。 */
+  function moveIncomingToSlot(refs, target, duration) {
+    var card = refs.incomingCard;
+    if (!card || !target) return null;
+    var from = card.getBoundingClientRect();
+    var to = target.getBoundingClientRect();
+    var dx = (to.left + to.width / 2) - (from.left + from.width / 2);
+    var dy = (to.top + to.height / 2) - (from.top + from.height / 2);
+    var scale = from.width ? Math.min(1, to.width / from.width) : 1;
+
+    card.dataset.state = "moving";
+    card.style.transition = "transform " + duration + "ms cubic-bezier(.22,.61,.36,1)";
+    card.style.transform =
+      "translate(" + Math.round(dx) + "px," + Math.round(dy) + "px) scale(" +
+      (Math.round(scale * 100) / 100) + ")";
+    return card;
+  }
+
+  /** 到着。placeholder を、**サーバーが確定した順位**を持つ通常のrowへ入れ替える。
+      順位を表示するのはこの瞬間だけで、client側の再計算は一切しない。 */
+  function normalizeIncomingRow(refs, subject, groups) {
+    var container = refs.rankingRest;
+    if (!container || !subject) return null;
+    var placeholder = container.querySelector(PLACEHOLDER_SELECTOR);
+    var row = buildRankingRow(subject, groups);
+    row.dataset.highlight = "true";
+    if (subject.rank === 1) row.dataset.top = "true";
+    if (placeholder) {
+      container.replaceChild(row, placeholder);
+    } else {
+      container.appendChild(row);
+    }
+    hideIncomingCard(refs);
+    return row;
+  }
+
+  function placeholderRow(refs) {
+    return refs.rankingRest ? refs.rankingRest.querySelector(PLACEHOLDER_SELECTOR) : null;
+  }
+
   function sortedByRank(subjects) {
     return (subjects || []).slice().sort(function (a, b) {
       return (a.rank - b.rank) || (a.sort_order - b.sort_order);
@@ -252,6 +342,12 @@
   var api = {
     UNREVEALED: UNREVEALED,
     buildRankingRow: buildRankingRow,
+    buildPlaceholderRow: buildPlaceholderRow,
+    showIncomingCard: showIncomingCard,
+    hideIncomingCard: hideIncomingCard,
+    moveIncomingToSlot: moveIncomingToSlot,
+    normalizeIncomingRow: normalizeIncomingRow,
+    placeholderRow: placeholderRow,
     buildRankGroupCard: buildRankGroupCard,
     sortedByRank: sortedByRank,
     renderRankingColumn: renderRankingColumn,

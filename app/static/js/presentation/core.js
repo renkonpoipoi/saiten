@@ -24,8 +24,10 @@
     subjectExit: 400,
 
     // SEQUENTIAL: 暫定ランキングへの挿入
+    // rankInsert = Incoming Score Card が staging に出るまで
+    // rankHold   = staging で見せる間(順位はまだ出さない)
     rankInsert: 600,
-    rankHold: 700,
+    rankHold: 750,
     rankMove: 750,
     rankSettled: 500,
     finalTitle: 800,

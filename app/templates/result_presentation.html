@@ -98,6 +98,16 @@
     <div class="p-ranking__rest" id="rankingRest"></div>
   </div>
 
+  {# SEQUENTIAL: 今回の組は一度ランキングの「外」に出してから、確定した順位の
+     slotへ運ぶ。staging中に順位を見せないため、順位を入れる要素をそもそも
+     持たせない(name と TOTAL だけの構造にしてある)。 #}
+  <div class="p-incoming-stage" id="incomingStage">
+    <div class="p-incoming" id="incomingCard" data-state="idle">
+      <div class="p-incoming__name" id="incomingName"></div>
+      <div class="p-incoming__score" id="incomingScore"></div>
+    </div>
+  </div>
+
   {# 最終ランキング表示中に必ず残る導線。BATCH / SEQUENTIAL のどちらも
      showRanking() 経由でここを表示するため、両モードで同じ実体を共有する。
      ここに hidden が付いたままになると袋小路になるので、showRanking() が

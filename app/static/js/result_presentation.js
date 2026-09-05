@@ -29,6 +29,10 @@
     rankingTop: document.getElementById("rankingTop"),
     rankingRest: document.getElementById("rankingRest"),
     rankingTitle: document.getElementById("rankingTitle"),
+    // SEQUENTIAL: ランキングの外に出す Incoming Score Card
+    incomingCard: document.getElementById("incomingCard"),
+    incomingName: document.getElementById("incomingName"),
+    incomingScore: document.getElementById("incomingScore"),
   };
 
   // 取得済みの集計結果。FINISHED後のreplay/ランキング再表示は全てこの値の
@@ -675,31 +679,47 @@
     return rankingPanel.dataset.final === "true";
   }
 
-  /** 今回Subjectを一番下に置いた「挿入前」の並び。ここから正しい順位へ動かす。 */
-  function insertionOrder(subjects, incomingId) {
-    const others = subjects.filter((s) => s.id !== incomingId);
-    const incoming = subjects.filter((s) => s.id === incomingId);
-    return [...stage.sortedByRank(others), ...incoming];
+  function subjectById(subjects, subjectId) {
+    return subjects.find((s) => s.id === subjectId) || null;
   }
 
+  /** ランキングに既に入っている組だけ(今回の組はまだ外に居る)。 */
+  function alreadyRanked(subjects, incomingId) {
+    return stage.sortedByRank(subjects.filter((s) => s.id !== incomingId));
+  }
+
+  // Incoming Score Card の進行。
+  //   RANK_INSERT  : ランキングの外(staging)にカードを出す。順位は出さない
+  //   RANK_HOLD    : staging で見せる間
+  //   RANK_MOVE    : 既存行はFLIPで最終位置へ。カードは確保したslotへ運ぶ
+  //   RANK_SETTLED : 到着。ここで初めてサーバーの順位を表示する
   function applyRankStep(step, subjects, incomingId) {
     switch (step.phase) {
-      case "RANK_INSERT":
-        renderRankingList(insertionOrder(subjects, incomingId), incomingId);
-        playSfx("rankTick");
+      case "RANK_INSERT": {
+        const incoming = subjectById(subjects, incomingId);
+        if (incoming) stage.showIncomingCard(stageRefs, incoming);
         break;
-      case "RANK_MOVE":
+      }
+      case "RANK_MOVE": {
         // 並べ替え前後の位置差を測って既存行を移動させる(FLIP)。
-        // 新規行は自前の登場アニメーションに任せる。
+        // 今回の組の行き先は placeholder で場所だけ確保しておく。
         stage.flipRows(
           stageRefs.rankingRest,
-          () => renderRankingList(stage.sortedByRank(subjects), incomingId),
+          () => renderRankingList(stage.sortedByRank(subjects), null, incomingId),
           core.TIMING.rankMove
         );
+        stage.moveIncomingToSlot(
+          stageRefs, stage.placeholderRow(stageRefs), core.TIMING.rankMove
+        );
+        playSfx("rankTick");
         break;
+      }
       case "RANK_SETTLED":
+        // 順位はサーバーが確定済み。ここでは表示に切り替えるだけで再計算しない。
+        stage.normalizeIncomingRow(
+          stageRefs, subjectById(subjects, incomingId), core.toRankGroups(subjects)
+        );
         stage.clearRowTransforms(stageRefs.rankingRest);
-        clearRankingHighlight();
         playSfx("rankSettle");
         break;
       case "FINAL_TITLE":
@@ -707,7 +727,7 @@
         break;
       case "WINNER_GLOW":
         rankingPanel.dataset.winner = "true";
-        playSfx("winner");
+        playSfx("winnerSting");
         break;
       default:
         break;
@@ -716,23 +736,22 @@
 
   // 1列表示(SEQUENTIALの暫定ランキングと、column レイアウトの最終ランキング)。
   // 3レイアウトともDOM構造は共通で、並べ方だけを data-layout でCSSが変える。
-  function renderRankingList(subjects, highlightId) {
+  // placeholderId の組だけは順位を持たない場所取りの行にする。到着するまで
+  // 順位を表示しないため(順位が付くのは normalizeIncomingRow の瞬間だけ)。
+  function renderRankingList(subjects, highlightId, placeholderId) {
     const groups = core.toRankGroups(subjects);
     stageRefs.rankingTop.innerHTML = "";
     stageRefs.rankingRest.innerHTML = "";
     subjects.forEach((subject) => {
-      const row = stage.buildRankingRow(subject, groups);
-      if (highlightId != null && subject.id === highlightId) {
+      const isPlaceholder = placeholderId != null && subject.id === placeholderId;
+      const row = isPlaceholder
+        ? stage.buildPlaceholderRow(subject)
+        : stage.buildRankingRow(subject, groups);
+      if (!isPlaceholder && highlightId != null && subject.id === highlightId) {
         row.dataset.highlight = "true";
       }
-      if (subject.rank === 1) row.dataset.top = "true";
+      if (!isPlaceholder && subject.rank === 1) row.dataset.top = "true";
       stageRefs.rankingRest.appendChild(row);
-    });
-  }
-
-  function clearRankingHighlight() {
-    Array.from(stageRefs.rankingRest.children).forEach((row) => {
-      delete row.dataset.highlight;
     });
   }
 
@@ -742,7 +761,9 @@
   }
 
   function showSequentialRankingFinalState(subjects, incomingId, isLast) {
-    renderRankingList(stage.sortedByRank(subjects), null);
+    // Skip でも「到着後」の正しい状態を作る。順位はサーバー値をそのまま出す。
+    renderRankingList(stage.sortedByRank(subjects), incomingId);
+    stage.hideIncomingCard(stageRefs);
     stage.clearRowTransforms(stageRefs.rankingRest);
     if (isLast) {
       markRankingFinal();
@@ -764,9 +785,12 @@
     rankingPanel.dataset.final = "false";
     rankingActions.classList.add("hidden");
     stage.setRankingTitle(stageRefs, CURRENT_RANKING_TITLE);
-    renderRankingList(insertionOrder(interimSubjects, pendingSubjectId), pendingSubjectId);
 
     const incomingId = pendingSubjectId;
+    // 今回の組はまだランキングに入れない。順位は一切見せず、既に発表済みの
+    // 組だけを現在の順位で並べておく。
+    renderRankingList(alreadyRanked(interimSubjects, incomingId), null);
+    stage.hideIncomingCard(stageRefs);
     return playSequence({
       steps: core.buildSequentialRankSteps(isLast),
       applyStep: (step) => applyRankStep(step, interimSubjects, incomingId),
