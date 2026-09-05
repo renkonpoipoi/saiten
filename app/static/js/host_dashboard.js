@@ -93,6 +93,8 @@
     document.getElementById("incompleteCount").textContent = data.incomplete_scorer_count;
 
     renderMatrix(data);
+    renderHostScoringLink(data);
+    renderDraw(data);
 
     const closeSection = document.getElementById("closeSection");
     const sequentialSection = document.getElementById("sequentialSection");
@@ -135,6 +137,69 @@
     } else {
       setPollingIndicator(true);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // ホスト兼任の採点者が自分の採点画面へ入る導線
+  //
+  // 遷移そのものは通常のHTML form (POST + target="_blank") が行う。JSは
+  // 「ホスト兼任がいるときだけformを出す」以外は何もしない。
+  //
+  // Host CodeもScorer CodeもURLに載らない。平文コードをclientが持たないので
+  // localStorage等へ保存する余地もない。対象Scorerはサーバーが
+  // project_id + is_host_scorer から決める(clientはidを送らない)。
+  // ---------------------------------------------------------------------------
+
+  function renderHostScoringLink(data) {
+    const form = document.getElementById("openHostScoringForm");
+    const hasHostScorer = (data.scorers || []).some((scorer) => scorer.is_host_scorer);
+    form.classList.toggle("hidden", !hasHostScorer);
+  }
+
+  // ---------------------------------------------------------------------------
+  // 発表順の抽選(表示のみ)
+  //
+  // **抽選の実行はここではしない。** 入口は /host/<id>/draw に一本化してある。
+  // ここが見せるのは「過去」だけで、未来の順番はサーバーから送られてこない。
+  // ---------------------------------------------------------------------------
+
+  function renderDraw(data) {
+    const section = document.getElementById("drawSection");
+    const draw = data.draw || {};
+    const isRandom = draw.subject_order_mode === "RANDOM_DRAW";
+    section.classList.toggle("hidden", !isRandom);
+    if (!isRandom) return;
+
+    const total = (data.subjects || []).length;
+    document.getElementById("drawProgressSummary").textContent =
+      `発表順抽選: ${draw.draw_cursor} / ${total} 組`;
+
+    const list = document.getElementById("drawnList");
+    list.innerHTML = "";
+    (draw.drawn || []).forEach((entry) => {
+      const row = document.createElement("li");
+      row.className = "progress-row";
+      row.textContent = `${entry.position}. ${entry.name}`;
+      list.appendChild(row);
+    });
+
+    document.getElementById("drawNextPlaceholder").textContent =
+      draw.remaining_count > 0
+        ? `次の発表者: ？？？ (残り ${draw.remaining_count} 組)`
+        : "全ての発表順が決まりました。";
+
+    // 全件抽選するまでは締め切れない(拒否の実体はサーバー側)
+    const warning = document.getElementById("drawLockWarning");
+    const incomplete = data.project_status === "SCORING" && draw.remaining_count > 0;
+    warning.classList.toggle("hidden", !incomplete);
+    warning.textContent = incomplete
+      ? "全被採点者の発表順抽選を完了してから採点を締め切ってください。"
+      : "";
+
+    document.getElementById("openDrawPageLink").href = `/host/${projectId}/draw`;
+
+    const closeButton = document.getElementById("closeButton");
+    if (closeButton) closeButton.disabled = incomplete;
   }
 
   const SUBJECT_STATUS_LABELS = {

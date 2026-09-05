@@ -312,10 +312,13 @@ def test_presentation_uses_one_url_for_both_modes():
 
 
 def test_sequential_reveal_reuses_the_batch_reveal_function():
+    """1 Subjectの得点発表engineはBATCH / SEQUENTIALで完全に同一のものを使う。"""
     js = (APP_DIR / "static" / "js" / "result_presentation.js").read_text(encoding="utf-8")
-    # revealSubjectの定義は1つだけで、SEQUENTIAL側もそれを呼ぶ
-    assert js.count("async function revealSubject(") == 1
-    assert "await revealSubject(payload.subject, payload.theoretical_max_total)" in js
+    # 得点発表engineの定義は1つだけ
+    assert js.count("async function revealSubjectSequence(") == 1
+    # BATCH側とSEQUENTIAL側の両方がそれを呼ぶ
+    assert "await revealSubjectSequence(subject, showBatchAdvance)" in js
+    assert "await revealSubjectSequence(payload.subject," in js
 
 
 def test_sequential_presentation_polling_has_safeguards():

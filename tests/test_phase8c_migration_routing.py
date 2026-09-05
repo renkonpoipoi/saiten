@@ -43,6 +43,9 @@ from app.config import build_config, resolve_migration_url
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV_PY = REPO_ROOT / "migrations" / "env.py"
 PHASE8_REVISION = "9c4e17a2b8d3"
+# `flask db upgrade` は常に head まで進む。ここで見たいのは
+# 「どちらのDBへ書いたか」であって head revision 値そのものではない。
+HEAD_REVISION = "d5b81c37f0ae"
 
 # 親プロセス(開発者のshell)には本番Neonの接続文字列が入っている場合がある。
 # subprocessへ絶対に継承させない。
@@ -123,7 +126,7 @@ def test_online_upgrade_uses_migration_database_url(split_urls):
     _run_ok(env, "upgrade")
 
     assert migration.exists(), "migration側DBが作成されていない(routingが効いていない)"
-    assert _alembic_version(migration) == PHASE8_REVISION
+    assert _alembic_version(migration) == HEAD_REVISION
     assert "presentation_mode" in _columns(migration, "projects")
     assert {"presentation_status", "locked_at", "presented_at"} <= _columns(
         migration, "subjects"
@@ -146,7 +149,7 @@ def test_online_current_and_check_use_migration_database_url(split_urls):
     _runtime, _migration, env = split_urls
     _run_ok(env, "upgrade")
 
-    assert PHASE8_REVISION in _run_ok(env, "current")
+    assert HEAD_REVISION in _run_ok(env, "current")
     assert "No new upgrade operations detected" in _run_ok(env, "check")
 
 
@@ -174,7 +177,7 @@ def test_online_upgrade_falls_back_to_database_url(tmp_path):
     _run_ok(env, "upgrade")
 
     assert runtime.exists()
-    assert _alembic_version(runtime) == PHASE8_REVISION
+    assert _alembic_version(runtime) == HEAD_REVISION
     assert "presentation_mode" in _columns(runtime, "projects")
 
 

@@ -13,6 +13,12 @@ PROJECT_STATUSES = ("DRAFT", "SCORING", "LOCKED", "PRESENTING", "FINISHED")
 # 既存Project(Phase 8以前に作られたもの)はserver_defaultによりBATCHになる。
 PRESENTATION_MODES = ("BATCH", "SEQUENTIAL")
 
+# 被採点者の発表順の決め方。
+# MANUAL:      Host Settings の並び順(Subject.sort_order)がそのまま正式な発表順。
+# RANDOM_DRAW: 採点開始時にサーバーが秘密順(Subject.draw_order)を一度だけ確定し、
+#              本番中に1組ずつ抽選で公開する。sort_order は管理画面上の表示順として残る。
+SUBJECT_ORDER_MODES = ("MANUAL", "RANDOM_DRAW")
+
 # 全PK/FKはdb.Integer(SQLite/PostgreSQL双方でシンプルに動く整数型)を採用する。
 # 実装計画v2のDDL例はPostgres向けにBIGINT/BIGSERIALを提示していたが、
 # 本アプリの規模ではINTEGER(上限約21億)で十分であり、SQLiteのINTEGER
@@ -47,6 +53,24 @@ class Project(db.Model):
         nullable=False,
         default="BATCH",
         server_default=text("'BATCH'"),
+    )
+    # CheckConstraintをcolumn levelで宣言する理由は presentation_mode と同じ。
+    subject_order_mode = db.Column(
+        db.String(16),
+        db.CheckConstraint(
+            "subject_order_mode IN ('MANUAL','RANDOM_DRAW')",
+            name="ck_projects_subject_order_mode",
+        ),
+        nullable=False,
+        default="MANUAL",
+        server_default=text("'MANUAL'"),
+    )
+    # RANDOM_DRAWで既に公開した抽選の件数。「公開済み」の唯一の定義であり、
+    # subjects.draw_order < projects.draw_cursor が公開済みを意味する。
+    # 抽選はこの値へのcompare-and-swapで進めるので、retryや同時POSTでも
+    # 2組進んだり同じ組を2回消費したりしない(drawn_at のような別の真実源は持たない)。
+    draw_cursor = db.Column(
+        db.Integer, nullable=False, default=0, server_default=text("0")
     )
     allow_host_scoring = db.Column(
         db.Boolean, nullable=False, default=False, server_default=false()

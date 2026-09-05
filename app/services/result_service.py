@@ -21,6 +21,12 @@ from app.services.project_service import (
 )
 
 
+# 発表データを外へ出してよいSubjectの進行状態。
+# LOCKED = いま得点発表中(まだPRESENTEDではない)、PRESENTED = 発表確定済み。
+# WAITING / SCORING のSubjectはこの集合に含めない = 点数を一切外へ出さない。
+REVEALABLE_SUBJECT_STATUSES = ("LOCKED", "PRESENTED")
+
+
 class _ScoreIndex:
     """1プロジェクト分のsubmitted評価を、集計しやすい形にまとめて保持する。
 
@@ -57,10 +63,12 @@ def _load_score_index(project: Project) -> _ScoreIndex:
             Evaluation.project_id == project.id,
             Evaluation.status == "submitted",
         )
-        # judge開示順を決定的にするため明示的に並べる。Scorerにsort_orderが無いので
-        # 採番順(=作成順)であるscorer_idを使う。これが無いとDBの返却順に依存して
-        # 実行環境ごとにReveal順が変わりうる。
-        .order_by(Evaluation.scorer_id)
+        # judge開示順を決定的にするため明示的に並べる。Hostが決めた採点者の
+        # 並び順(座席順)をそのまま得点開示順にしたいので Scorer.sort_order を使う。
+        # 既存Projectは全員 sort_order=0 なので id へフォールバックし、
+        # Phase 10B以前と同じ「作成順」になる。
+        .join(Scorer, Scorer.id == Evaluation.scorer_id)
+        .order_by(Scorer.sort_order, Scorer.id)
         .all()
     )
     if not evaluations:
@@ -95,14 +103,33 @@ def _competition_rank(sorted_results: list[dict]) -> None:
         previous_total = result["total_score"]
 
 
+def _event_order(project: Project, subject: Subject) -> int:
+    """本番の進行順(0始まり)。
+
+    RANDOM_DRAWでは抽選順(draw_order)、MANUALでは表示順(sort_order)。
+    RANDOM_DRAWで全件抽選する前にLOCKEDへ進めないよう transition_to_locked が
+    守っているため、この値が返る場面では draw_order は必ず公開済みになっている。
+    (抽選前に漏れないよう、これを含めるのは発表可能な範囲のendpointだけ)
+    """
+    if project.subject_order_mode == "RANDOM_DRAW" and subject.draw_order is not None:
+        return subject.draw_order
+    return subject.sort_order
+
+
 def _build_subject_row(
     project: Project,
     subject: Subject,
     criteria: list[Criterion],
     index: _ScoreIndex,
     official_ids: set[int],
+    *,
+    with_event_order: bool = False,
 ) -> dict:
-    """1 Subjectの公式集計結果を組み立てる。公式対象外のScorerは加算しない。"""
+    """1 Subjectの公式集計結果を組み立てる。公式対象外のScorerは加算しない。
+
+    with_event_order は **発表順を出してよいendpointだけ** がTrueにする
+    (result-summary / interim-ranking / subjects/<id>/result)。
+    """
     official_eval_ids = [
         eval_id
         for eval_id in index.eval_ids_by_subject.get(subject.id, [])
@@ -137,7 +164,7 @@ def _build_subject_row(
         for c in criteria
     ]
 
-    return {
+    row = {
         "id": subject.id,
         "name": subject.name,
         "sort_order": subject.sort_order,
@@ -148,6 +175,9 @@ def _build_subject_row(
         "criterion_averages": criterion_averages,
         "judge_totals": judge_totals,
     }
+    if with_event_order:
+        row["event_order"] = _event_order(project, subject)
+    return row
 
 
 def _project_criteria(project: Project) -> list[Criterion]:
@@ -177,7 +207,9 @@ def build_result_summary(project: Project) -> dict:
     index = _load_score_index(project)
 
     subject_results = [
-        _build_subject_row(project, subject, criteria, index, official_ids)
+        _build_subject_row(
+            project, subject, criteria, index, official_ids, with_event_order=True
+        )
         for subject in subjects
     ]
 
@@ -210,7 +242,7 @@ def build_subject_result(project: Project, subject: Subject) -> dict:
         raise ForbiddenError("Subject does not belong to this project.")
 
     status = subject_presentation_status(project, subject)
-    if status not in ("LOCKED", "PRESENTED"):
+    if status not in REVEALABLE_SUBJECT_STATUSES:
         raise ConflictError(
             f"This subject's result is not available yet (current status: {status})."
         )
@@ -226,7 +258,54 @@ def build_subject_result(project: Project, subject: Subject) -> dict:
         ],
         "theoretical_max_total": sum(c.max_score for c in criteria),
         "official_scorer_count": len(official_ids),
-        "subject": _build_subject_row(project, subject, criteria, index, official_ids),
+        "subject": _build_subject_row(
+            project, subject, criteria, index, official_ids, with_event_order=True
+        ),
+    }
+
+
+def build_interim_ranking(project: Project) -> dict:
+    """SEQUENTIALの暫定ランキング(最後のSubjectではそのまま最終順位になる)。
+
+    含めるSubjectは presentation_status が LOCKED か PRESENTED のものだけ。
+    SEQUENTIALでは当該Subjectを
+      LOCKED -> Judge Reveal -> TOTAL -> 暫定ランキングへ挿入
+      -> Hostが「確定して次へ」 -> PRESENTED
+    の順で扱うため、ランキングへ挿入する瞬間の今回SubjectはLOCKEDである。
+    したがって「未発表を除く」ではなく「WAITING / SCORING を除く」と定義する。
+
+    順位は既存の _competition_rank をそのまま使う。順位の正解はサーバーの
+    このロジックだけが持ち、クライアント側では再計算しない。
+
+    Project.statusがSCORINGのままでも取得できる点がresult-summaryと異なるが、
+    返す範囲はsubject単位のエンドポイント(build_subject_result)と同じゲートに
+    揃えてあるため、開示範囲は広がらない。
+    """
+    subjects = _project_subjects(project)
+    criteria = _project_criteria(project)
+    official_ids = official_scorer_ids(project)
+    index = _load_score_index(project)
+
+    revealable = [
+        subject
+        for subject in subjects
+        if subject_presentation_status(project, subject) in REVEALABLE_SUBJECT_STATUSES
+    ]
+    subject_results = [
+        _build_subject_row(
+            project, subject, criteria, index, official_ids, with_event_order=True
+        )
+        for subject in revealable
+    ]
+
+    ranked = sorted(subject_results, key=lambda r: (-r["total_score"], r["sort_order"]))
+    _competition_rank(ranked)
+
+    return {
+        "project": _project_header(project),
+        "theoretical_max_total": sum(c.max_score for c in criteria),
+        "official_scorer_count": len(official_ids),
+        "subjects": ranked,
     }
 
 

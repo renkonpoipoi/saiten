@@ -6,6 +6,7 @@ route側はHTTPの入出力にのみ責務を持ち、業務ロジックはこ�
 
 from __future__ import annotations
 
+import secrets
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from app.errors import ConflictError, ForbiddenError, ValidationError
 from app.extensions import db
 from app.models import (
     PRESENTATION_MODES,
+    SUBJECT_ORDER_MODES,
     Criterion,
     Evaluation,
     Project,
@@ -25,7 +27,6 @@ from app.services.code_service import generate_host_code, generate_scorer_code, 
 
 REQUIRED_CRITERION_COUNT = 5
 DEFAULT_MAX_SCORE = 20
-HOST_SCORER_DISPLAY_NAME = "ホスト"
 
 
 class ProjectStateError(ConflictError):
@@ -38,6 +39,61 @@ def _utcnow() -> datetime:
 
 def _clean_names(raw_names: list[str]) -> list[str]:
     return [n.strip() for n in raw_names if n and n.strip()]
+
+
+def _resolve_host_scorer_index(raw_index, scorer_count: int) -> int:
+    """「ホストとして採点する人」を指すindexを検証して返す。
+
+    Project作成は1リクエストで完結し、この時点ではScorer.idがまだ無いため、
+    display_nameではなく**空文字除去後のscorer配列に対するindex**で指定させる
+    (採点者名は重複しうるため名前では一意に指せない)。
+
+    boolはintのサブクラスなので、Trueが1として通ってしまわないよう明示的に弾く。
+    """
+    if raw_index is None:
+        raise ValidationError(
+            "host_scorer_index is required when allow_host_scoring is enabled."
+        )
+    if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+        raise ValidationError("host_scorer_index must be an integer.")
+    if not 0 <= raw_index < scorer_count:
+        raise ValidationError(
+            f"host_scorer_index must be between 0 and {scorer_count - 1}."
+        )
+    return raw_index
+
+
+def _normalize_sort_order(rows: list) -> None:
+    """並び順を 0..N-1 の連番へ詰め直す(rows は既に希望順に並んでいること)。
+
+    **2段階で代入する。** subjects には UNIQUE(project_id, sort_order) があり、
+    素直に代入すると途中で必ず既存値と衝突して IntegrityError になる。
+    一旦衝突しない負値へ退避して flush() し、そのあと最終値を入れる。
+    scorers には現状この制約が無いが、扱いを揃えておく。
+    """
+    if not rows:
+        return
+    for index, row in enumerate(rows):
+        row.sort_order = -(index + 1)
+    db.session.flush()
+    for index, row in enumerate(rows):
+        row.sort_order = index
+
+
+def _active_scorers_in_order(project_id: int) -> list[Scorer]:
+    return (
+        Scorer.query.filter_by(project_id=project_id, is_active=True)
+        .order_by(Scorer.sort_order, Scorer.id)
+        .all()
+    )
+
+
+def _subjects_in_order(project_id: int) -> list[Subject]:
+    return (
+        Subject.query.filter_by(project_id=project_id)
+        .order_by(Subject.sort_order, Subject.id)
+        .all()
+    )
 
 
 def _require_draft(project: Project) -> None:
@@ -65,11 +121,17 @@ def create_project(
     criterion_names: list[str],
     allow_host_scoring: bool,
     presentation_mode: str = "BATCH",
+    host_scorer_index: object = None,
 ) -> dict:
     """Project/Subject/Criterion/Scorerを1トランザクションで一括作成する。
 
     戻り値には平文のhost_code・scorer codeを一度だけ含める(DBにはhashのみ
     保存する)。
+
+    **Host roleはScorerの属性であって別人格ではない。** allow_host_scoringが
+    Trueのとき、入力済みScorerのうちhost_scorer_indexで指された1人に
+    is_host_scorerを立てるだけで、Scorerの数は増やさない。
+    (Phase 10A以前は「ホスト」という名前のScorerを1人追加していた。)
     """
     name = (name or "").strip()
     if not name:
@@ -95,12 +157,20 @@ def create_project(
             f"presentation_mode must be one of {PRESENTATION_MODES}."
         )
 
+    allow_host_scoring = bool(allow_host_scoring)
+    # 検証はDBへ書き始める前に済ませる(不正なindexでProjectが作られないように)。
+    host_index = (
+        _resolve_host_scorer_index(host_scorer_index, len(scorer_names))
+        if allow_host_scoring
+        else None
+    )
+
     host_code = generate_host_code()
     project = Project(
         name=name,
         status="DRAFT",
         host_code_hash=hash_code(host_code),
-        allow_host_scoring=bool(allow_host_scoring),
+        allow_host_scoring=allow_host_scoring,
         presentation_mode=presentation_mode,
     )
     db.session.add(project)
@@ -120,18 +190,17 @@ def create_project(
         )
 
     scorer_payload = []
-    all_scorer_names = list(scorer_names)
-    if allow_host_scoring:
-        all_scorer_names.append(HOST_SCORER_DISPLAY_NAME)
-
-    for index, scorer_name in enumerate(all_scorer_names):
-        is_host_scorer = allow_host_scoring and index == len(all_scorer_names) - 1
+    for index, scorer_name in enumerate(scorer_names):
+        # 入力されたScorerのうち1人にHost roleを割り当てるだけ。人数は増やさない。
+        is_host_scorer = index == host_index
         code = generate_scorer_code()
         scorer = Scorer(
             project_id=project.id,
             display_name=scorer_name,
             access_code_hash=hash_code(code),
             is_host_scorer=is_host_scorer,
+            # 入力された採点者の順をそのまま初期の並び順にする
+            sort_order=index,
         )
         db.session.add(scorer)
         db.session.flush()
@@ -180,6 +249,8 @@ def add_subject(project: Project, name: str) -> Subject:
         project_id=project.id, name=name, sort_order=(max_order + 1) if max_order is not None else 0
     )
     db.session.add(subject)
+    db.session.flush()
+    _normalize_sort_order(_subjects_in_order(project.id))
     db.session.commit()
     return subject
 
@@ -199,6 +270,9 @@ def delete_subject(project: Project, subject: Subject) -> None:
     _require_draft(project)
     _require_owned(project, subject, label="Subject")
     db.session.delete(subject)
+    db.session.flush()
+    # 残った被採点者を 0..N-1 へ詰め直す(gapを残さない)
+    _normalize_sort_order(_subjects_in_order(project.id))
     db.session.commit()
 
 
@@ -220,10 +294,21 @@ def add_scorer(project: Project, display_name: str) -> tuple[Scorer, str]:
     if not display_name:
         raise ValidationError("Scorer name is required.")
     code = generate_scorer_code()
+    max_order = (
+        db.session.query(func.max(Scorer.sort_order))
+        .filter_by(project_id=project.id, is_active=True)
+        .scalar()
+    )
     scorer = Scorer(
-        project_id=project.id, display_name=display_name, access_code_hash=hash_code(code)
+        project_id=project.id,
+        display_name=display_name,
+        access_code_hash=hash_code(code),
+        # 新しい採点者は末尾へ。そのあと 0..N-1 へ詰め直す。
+        sort_order=(max_order + 1) if max_order is not None else 0,
     )
     db.session.add(scorer)
+    db.session.flush()
+    _normalize_sort_order(_active_scorers_in_order(project.id))
     db.session.commit()
     return scorer, code
 
@@ -242,8 +327,336 @@ def update_scorer_name(project: Project, scorer: Scorer, display_name: str) -> S
 def delete_scorer(project: Project, scorer: Scorer) -> None:
     _require_draft(project)
     _require_owned(project, scorer, label="Scorer")
+    # ホスト兼任だったScorerを消したら、その事実をProject側にも反映する。
+    # 「ホスト兼任がいないのに allow_host_scoring=true」という中途半端な状態を
+    # 残さないため、同一トランザクションで確定させる。
+    if scorer.is_host_scorer:
+        project.allow_host_scoring = False
     db.session.delete(scorer)
+    db.session.flush()
+    # 残った採点者を 0..N-1 へ詰め直す(gapを残さない)
+    _normalize_sort_order(_active_scorers_in_order(project.id))
     db.session.commit()
+
+
+def set_host_scorer(project: Project, scorer: Scorer | None) -> Scorer | None:
+    """DRAFT中にHost兼任のScorerを付け替える(Noneで解除)。
+
+    Host roleはScorerの属性なので、付け替えはフラグの移動だけで完結する。
+    Scorerの追加・削除は行わない。
+
+    **順序が重要。** 「1 Projectにつき is_host_scorer=true は最大1人」という
+    部分UNIQUE INDEXと共存させるため、必ず
+
+        旧Hostを False -> flush() -> 新Hostを True -> commit
+
+    の順で書く。SQLAlchemyのunit of workは同一flush内のUPDATEを主キー順で
+    並べるため、明示的にflushを挟まないと「新Hostを立てるUPDATE」が
+    「旧Hostを降ろすUPDATE」より先に飛び、一時的に2人trueになってUNIQUE違反
+    しうる(plainなunique indexはdeferrableではないので即時に評価される)。
+    """
+    _require_draft(project)
+
+    current = (
+        Scorer.query.filter_by(project_id=project.id, is_host_scorer=True).all()
+    )
+
+    if scorer is None:
+        for existing in current:
+            existing.is_host_scorer = False
+        project.allow_host_scoring = False
+        db.session.commit()
+        return None
+
+    _require_owned(project, scorer, label="Scorer")
+    if not scorer.is_active:
+        raise ValidationError("An inactive scorer cannot take the host role.")
+
+    # 1) 旧Hostを降ろす
+    demoted = [existing for existing in current if existing.id != scorer.id]
+    for existing in demoted:
+        existing.is_host_scorer = False
+    if demoted:
+        # 2) 降格のUPDATEだけを先にDBへ送る(ここが無いとUNIQUE違反しうる)
+        db.session.flush()
+
+    # 3) 新Hostを立てる
+    scorer.is_host_scorer = True
+    project.allow_host_scoring = True
+    db.session.commit()
+    return scorer
+
+
+# ---------------------------------------------------------------------------
+# 発表順モードと抽選
+# ---------------------------------------------------------------------------
+
+
+def set_subject_order_mode(project: Project, mode: str) -> Project:
+    """発表順の決め方を切り替える(DRAFT限定)。
+
+    RANDOM_DRAWを選んでもこの時点では秘密順を作らない。DRAFT中はSubjectの
+    追加・削除・改名が自由にできるので、構成がfreezeされるSCORING開始時まで
+    生成を遅らせる(§I)。
+    """
+    _require_draft(project)
+    if mode is not None and not isinstance(mode, str):
+        raise ValidationError("subject_order_mode must be a string.")
+    mode = (mode or "").strip().upper()
+    if mode not in SUBJECT_ORDER_MODES:
+        raise ValidationError(
+            f"subject_order_mode must be one of {SUBJECT_ORDER_MODES}."
+        )
+    project.subject_order_mode = mode
+    db.session.commit()
+    return project
+
+
+def _generate_draw_sequence(project: Project, subjects: list[Subject]) -> None:
+    """秘密の発表順を一度だけ確定する。
+
+    OS entropy 由来の SystemRandom を使う。暗号設計を持ち込むためではなく、
+    「意図しない固定seed / 予測可能な列」を避けるため。
+    生成後は immutable で、reroll する経路は用意しない。
+    """
+    shuffled = list(subjects)
+    secrets.SystemRandom().shuffle(shuffled)
+    # UNIQUE(project_id, draw_order) があるので、一旦NULLへ退避してから割り当てる
+    for subject in shuffled:
+        subject.draw_order = None
+    db.session.flush()
+    for index, subject in enumerate(shuffled):
+        subject.draw_order = index
+    project.draw_cursor = 0
+
+
+def published_subjects(project: Project) -> list[Subject]:
+    """既に抽選で公開されたSubjectを、公開された順に返す。
+
+    公開済みの定義は draw_order < draw_cursor の**一点のみ**。
+    別途 drawn_at のような第2の真実源は持たない。
+    """
+    if project.subject_order_mode != "RANDOM_DRAW":
+        return []
+    return (
+        Subject.query.filter(
+            Subject.project_id == project.id,
+            Subject.draw_order.isnot(None),
+            Subject.draw_order < project.draw_cursor,
+        )
+        .order_by(Subject.draw_order)
+        .all()
+    )
+
+
+def subject_count(project_id: int) -> int:
+    return (
+        db.session.query(func.count(Subject.id))
+        .filter(Subject.project_id == project_id)
+        .scalar()
+        or 0
+    )
+
+
+def draw_progress(project: Project) -> dict:
+    """抽選の「過去」だけを返す。**未来は絶対に含めない。**
+
+    秘密なのはSubject名ではなく順序なので、Subject名自体は他のAPIが返してよい。
+    ここが返すのは、公開済みの並び・公開件数・残数・抽選可否だけで、
+    draw_order も next Subject も含まない構造にしてある。
+    """
+    total = subject_count(project.id)
+    if project.subject_order_mode != "RANDOM_DRAW":
+        return {
+            "subject_order_mode": project.subject_order_mode,
+            "draw_cursor": 0,
+            "drawn": [],
+            "remaining_count": 0,
+            "can_draw": False,
+        }
+
+    drawn = published_subjects(project)
+    return {
+        "subject_order_mode": project.subject_order_mode,
+        "draw_cursor": project.draw_cursor,
+        "drawn": [
+            {"position": index + 1, "id": subject.id, "name": subject.name}
+            for index, subject in enumerate(drawn)
+        ],
+        "remaining_count": max(0, total - project.draw_cursor),
+        "can_draw": project.status == "SCORING" and project.draw_cursor < total,
+    }
+
+
+class DrawStateError(ConflictError):
+    """抽選できない状態(モード違い・状態違い・枯渇・発表中)を表す。"""
+
+
+def _subject_at_draw_position(project_id: int, position: int) -> Subject | None:
+    return Subject.query.filter_by(project_id=project_id, draw_order=position).first()
+
+
+def draw_next_subject(project: Project, expected_cursor) -> dict:
+    """次の発表者を1組だけ公開する。
+
+    **判定順が重要。** 先に「現在SCORINGのSubjectが居るか」を見てしまうと、
+    初回抽選が成功した直後のduplicate retry(responseだけ失われた場合)が
+    409になってしまう。そこで必ず cursor の比較を先に行い、
+    「今回新しく進めようとしているrequestか」を確定させてから状態を検査する。
+
+      Case A: expected < current  -> 成功済みdrawへのretry。**replayして返す**
+                                     (SEQUENTIALで既にSCORINGでも拒否しない)
+      Case B: expected > current  -> future / stale。409。何も公開しない
+      Case C: expected == current -> ここで初めて新規drawとして扱い、
+                                     SEQUENTIALなら発表中でないことを確かめてCAS
+
+    CASが競合で失敗した場合は cursor を読み直す。他方が先に進めていれば
+    Case A と同じ replay になるので、両方が同じSubjectを認識する。
+    """
+    if isinstance(expected_cursor, bool) or not isinstance(expected_cursor, int):
+        raise ValidationError("expected_cursor must be an integer.")
+    if expected_cursor < 0:
+        raise ValidationError("expected_cursor must not be negative.")
+
+    if project.subject_order_mode != "RANDOM_DRAW":
+        raise DrawStateError("This project does not use a random draw.")
+    if project.status != "SCORING":
+        raise DrawStateError("Scoring is not in progress.")
+
+    total = subject_count(project.id)
+
+    def _replay(position: int) -> dict:
+        subject = _subject_at_draw_position(project.id, position)
+        if subject is None:
+            raise DrawStateError("That draw position does not exist.")
+        return _draw_result(project, subject, position, total, replayed=True)
+
+    # --- Case A: 既に成功しているdrawへのretry -------------------------------
+    if expected_cursor < project.draw_cursor:
+        return _replay(expected_cursor)
+
+    # --- Case B: 未来 / stale ------------------------------------------------
+    if expected_cursor > project.draw_cursor:
+        raise DrawStateError(
+            "This draw request is out of date. Reload the page and try again."
+        )
+
+    # --- Case C: 新しく進めるrequest ----------------------------------------
+    if project.draw_cursor >= total:
+        raise DrawStateError("All subjects have been drawn.")
+
+    if project.presentation_mode == "SEQUENTIAL":
+        in_progress = Subject.query.filter_by(
+            project_id=project.id, presentation_status="SCORING"
+        ).first()
+        if in_progress is not None:
+            raise DrawStateError(
+                "Finish the current subject before drawing the next one."
+            )
+
+    # compare-and-swap。行ロックもworker数の前提も要らない単一UPDATE。
+    updated = (
+        db.session.query(Project)
+        .filter(
+            Project.id == project.id,
+            Project.draw_cursor == expected_cursor,
+            Project.subject_order_mode == "RANDOM_DRAW",
+            Project.status == "SCORING",
+            Project.draw_cursor < total,
+        )
+        .update({Project.draw_cursor: Project.draw_cursor + 1},
+                synchronize_session=False)
+    )
+
+    if updated != 1:
+        # 競合で負けた。cursorを読み直し、他方が進めていれば同じ結果をreplayする。
+        db.session.rollback()
+        db.session.refresh(project)
+        if expected_cursor < project.draw_cursor:
+            return _replay(expected_cursor)
+        raise DrawStateError("Could not draw the next subject. Please try again.")
+
+    subject = _subject_at_draw_position(project.id, expected_cursor)
+    if subject is None:
+        db.session.rollback()
+        raise DrawStateError("The draw sequence is incomplete.")
+
+    if project.presentation_mode == "SEQUENTIAL":
+        # 公開と同時にそのSubjectの採点を開始する(同一トランザクション)
+        subject.presentation_status = "SCORING"
+
+    db.session.commit()
+    db.session.refresh(project)
+    return _draw_result(project, subject, expected_cursor, total, replayed=False)
+
+
+def _draw_result(
+    project: Project, subject: Subject, position: int, total: int, *, replayed: bool
+) -> dict:
+    """今回公開した1件だけを返す。未来は1件も含めない。"""
+    return {
+        "subject": {"id": subject.id, "name": subject.name},
+        "position": position + 1,
+        "draw_cursor": project.draw_cursor,
+        "remaining_count": max(0, total - project.draw_cursor),
+        "replayed": replayed,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 並び替え(DRAFT限定)
+# ---------------------------------------------------------------------------
+
+
+def _validate_reorder_ids(raw_ids, rows, *, label: str) -> list[int]:
+    """並び替えリクエストのIDリストを検証する。
+
+    「現存する集合と過不足なく一致すること」を要求する。部分的な並び替えを
+    許すと、送られてこなかった行の順位が不定になるため。
+    """
+    if not isinstance(raw_ids, list):
+        raise ValidationError(f"{label}_ids must be a list.")
+    for raw_id in raw_ids:
+        if isinstance(raw_id, bool) or not isinstance(raw_id, int):
+            raise ValidationError(f"{label}_ids must contain integers.")
+
+    requested = list(raw_ids)
+    if len(set(requested)) != len(requested):
+        raise ValidationError(f"{label}_ids must not contain duplicates.")
+
+    existing = {row.id for row in rows}
+    if set(requested) != existing:
+        raise ValidationError(
+            f"{label}_ids must list every {label} of this project exactly once."
+        )
+    return requested
+
+
+def reorder_subjects(project: Project, subject_ids) -> list[Subject]:
+    """被採点者の並び順を一括で保存する(DRAFT限定)。"""
+    _require_draft(project)
+    rows = _subjects_in_order(project.id)
+    ordered_ids = _validate_reorder_ids(subject_ids, rows, label="subject")
+
+    by_id = {row.id: row for row in rows}
+    _normalize_sort_order([by_id[subject_id] for subject_id in ordered_ids])
+    db.session.commit()
+    return _subjects_in_order(project.id)
+
+
+def reorder_scorers(project: Project, scorer_ids) -> list[Scorer]:
+    """採点者の並び順(座席順)を一括で保存する(DRAFT限定)。
+
+    対象は active な採点者のみ。is_host_scorer は順序に一切影響しない。
+    """
+    _require_draft(project)
+    rows = _active_scorers_in_order(project.id)
+    ordered_ids = _validate_reorder_ids(scorer_ids, rows, label="scorer")
+
+    by_id = {row.id: row for row in rows}
+    _normalize_sort_order([by_id[scorer_id] for scorer_id in ordered_ids])
+    db.session.commit()
+    return _active_scorers_in_order(project.id)
 
 
 # ---------------------------------------------------------------------------
@@ -387,10 +800,21 @@ def transition_to_scoring(project: Project) -> Project:
                 Evaluation(project_id=project.id, scorer_id=scorer.id, subject_id=subject.id)
             )
 
+    random_draw = project.subject_order_mode == "RANDOM_DRAW"
+    if random_draw:
+        # 構成がfreezeされるこの瞬間に、秘密の発表順を一度だけ確定する。
+        _generate_draw_sequence(project, subjects)
+
     if project.presentation_mode == "SEQUENTIAL":
-        # 最初のSubjectだけを採点可能にし、残りは待機させる。
-        for index, subject in enumerate(subjects):
-            subject.presentation_status = "SCORING" if index == 0 else "WAITING"
+        if random_draw:
+            # 誰が最初かは抽選するまで分からないので、全員待機のままにする。
+            # (先頭をSCORINGにすると、それ自体が「次は誰か」の漏洩になる)
+            for subject in subjects:
+                subject.presentation_status = "WAITING"
+        else:
+            # 最初のSubjectだけを採点可能にし、残りは待機させる。
+            for index, subject in enumerate(subjects):
+                subject.presentation_status = "SCORING" if index == 0 else "WAITING"
 
     project.status = "SCORING"
     # Evaluationの一括生成・Subject状態の初期化・Project statusの更新を
@@ -422,6 +846,18 @@ def transition_to_locked(project: Project) -> Project:
         if not eligible_ids:
             raise ProjectStateError(
                 "Cannot lock: no eligible scorer has completed all subjects yet."
+            )
+
+    # 抽選を最後まで終えていないと発表順が確定しない。全件抽選する前に締め切ると、
+    # 実際には抽選していないSubjectのdraw_orderが結果発表順として使われてしまう。
+    # SEQUENTIALは「全SubjectがPRESENTED」条件により自然に満たされるが、
+    # 同じinvariantを通して二重に守る。MANUALは素通りする。
+    if project.subject_order_mode == "RANDOM_DRAW":
+        total = subject_count(project.id)
+        if project.draw_cursor < total:
+            raise ProjectStateError(
+                "Cannot lock: draw every subject first "
+                f"({project.draw_cursor} of {total} drawn)."
             )
 
     project.status = "LOCKED"
@@ -530,13 +966,17 @@ def present_subject(project: Project, subject: Subject) -> tuple[Subject, Subjec
     subject.presentation_status = "PRESENTED"
     subject.presented_at = _utcnow()
 
-    next_subject = (
-        Subject.query.filter_by(project_id=project.id, presentation_status="WAITING")
-        .order_by(Subject.sort_order)
-        .first()
-    )
-    if next_subject is not None:
-        next_subject.presentation_status = "SCORING"
+    # RANDOM_DRAWでは次を自動でSCORINGにしない。それをすると「次は誰か」が
+    # 抽選前に確定して漏れてしまう。次はHostが抽選したときだけ決まる。
+    next_subject = None
+    if project.subject_order_mode != "RANDOM_DRAW":
+        next_subject = (
+            Subject.query.filter_by(project_id=project.id, presentation_status="WAITING")
+            .order_by(Subject.sort_order)
+            .first()
+        )
+        if next_subject is not None:
+            next_subject.presentation_status = "SCORING"
 
     db.session.commit()
     return subject, next_subject
@@ -636,13 +1076,18 @@ def build_presentation_state(project: Project) -> dict:
         },
         "subjects": subject_rows,
         "participating_scorer_count": len(participating_scorer_ids(project.id)),
+        "draw": draw_progress(project),
         **_progression_summary(project, subject_rows),
     }
 
 
 def get_progress(project: Project) -> dict:
     subjects = Subject.query.filter_by(project_id=project.id).order_by(Subject.sort_order).all()
-    scorers = Scorer.query.filter_by(project_id=project.id, is_active=True).order_by(Scorer.id).all()
+    scorers = (
+        Scorer.query.filter_by(project_id=project.id, is_active=True)
+        .order_by(Scorer.sort_order, Scorer.id)
+        .all()
+    )
 
     eligible_ids = eligible_scorer_ids(project.id) if subjects else set()
 
@@ -680,5 +1125,7 @@ def get_progress(project: Project) -> dict:
         "eligible_scorer_count": len(eligible_ids),
         "incomplete_scorer_count": len(scorers) - len(eligible_ids),
         "participating_scorer_count": len(participating_scorer_ids(project.id)),
+        "subject_order_mode": project.subject_order_mode,
+        "draw": draw_progress(project),
         **_progression_summary(project, subject_rows),
     }

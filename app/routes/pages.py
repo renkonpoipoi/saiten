@@ -5,7 +5,12 @@
 
 from __future__ import annotations
 
-from flask import Blueprint, render_template
+from flask import Blueprint, redirect, render_template, session, url_for
+
+from app.auth.decorators import require_host
+from app.errors import ConflictError, NotFoundError
+from app.extensions import db
+from app.models import Project, Scorer
 
 pages_bp = Blueprint("pages", __name__)
 
@@ -59,6 +64,63 @@ def host_analysis_page(project_id: int):
 @pages_bp.get("/host/<int:project_id>/present")
 def result_presentation_page(project_id: int):
     return render_template("result_presentation.html", project_id=project_id)
+
+
+@pages_bp.get("/host/<int:project_id>/draw")
+def draw_page(project_id: int):
+    """発表順の抽選をプロジェクターへ出すための専用画面。
+
+    抽選はProject.statusがSCORINGの間に行うが、結果発表画面(/present)は
+    BATCHではLOCKED以降しか使えない設計になっている。責務も状態ゲートも
+    違うので、結果発表とは別のページに分けている。
+
+    他のpage routeと同じくここではguardしない(認可の実体はAPI側で、
+    JSが403を検知してログインへ誘導する)。
+    """
+    return render_template("draw.html", project_id=project_id)
+
+
+@pages_bp.post("/host/<int:project_id>/scoring")
+@require_host
+def host_scoring_entry(project_id: int):
+    """Host本人が、コード入力なしに自分の採点画面を新規タブで開くための入口。
+
+    Host Dashboard 上の通常のHTML form (method="post" target="_blank") から
+    呼ばれる。session設定とredirectをサーバー側で完結させるので、
+    クライアントは about:blank を開いて WindowProxy を操作する必要がない。
+
+    対象のScorerは **サーバーが project_id + is_host_scorer + is_active から
+    決める。** clientからscorer_idを受け取らないので、この経路で他のScorerへ
+    なりすますことはできない。
+
+    POSTのみ。GETでsessionを書き換えないことで、リンクのプリフェッチや
+    <img src> のような受動的なrequestでscorer sessionが差し替わることを防ぐ。
+    既存のCSRFProtectの保護下に入る(formがcsrf_tokenを送る)。
+
+    Host sessionは破棄しない。session["host_project_id"] と
+    session["scorer_id"] は別keyなので、元タブのHost Dashboardは
+    そのまま使い続けられる。
+    """
+    project = db.session.get(Project, project_id)
+    if project is None:
+        raise NotFoundError("Project not found.")
+
+    scorer = (
+        Scorer.query.filter_by(
+            project_id=project.id, is_host_scorer=True, is_active=True
+        )
+        .order_by(Scorer.sort_order, Scorer.id)
+        .first()
+    )
+    if scorer is None:
+        raise ConflictError(
+            "This project has no host scorer. Assign one in the project settings."
+        )
+
+    session["scorer_id"] = scorer.id
+    session["scorer_project_id"] = scorer.project_id
+    # 303: POSTの結果をGETで取りに行かせる(再読み込みでPOSTが再送されない)
+    return redirect(url_for("pages.scorer_dashboard_page"), code=303)
 
 
 @pages_bp.get("/scorer")

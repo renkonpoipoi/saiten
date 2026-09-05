@@ -58,6 +58,22 @@ h1, h2, h3 { margin: 0 0 12px; }
 }
 .field textarea { resize: vertical; min-height: 80px; }
 
+/* selectは他のフォーム部品と同じ見た目にする。ここを指定しないと、
+   body から継承した明るい文字色に対して背景がUA既定のままになり、
+   ダークテーマ上で選択肢が読めない(=操作不能に見える)。 */
+select {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #10131a;
+  color: var(--text);
+  font-size: 1rem;
+  min-width: 12ch;
+  max-width: 100%;
+}
+select:disabled { opacity: .5; cursor: not-allowed; }
+select option { background: #10131a; color: var(--text); }
+
 .repeatable-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 .repeatable-row { display: flex; gap: 8px; }
 .repeatable-row input { flex: 1; }
@@ -140,11 +156,34 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--lin
   padding: 10px 16px;
   border-radius: 8px;
   z-index: 50;
+  /* 通知は4秒間 z-index:50 で画面に重なる。pointer-events を切っておかないと、
+     その4秒のあいだ重なった範囲のクリック・フォーカスを奪ってしまい、
+     「操作できないが、しばらく待つと勝手に直る」という挙動になる。
+     通知に操作要素は無いので、常にクリックを透過させる。 */
+  pointer-events: none;
 }
 .toast.error { border-color: var(--red); color: #ffb4ba; }
 .hidden { display: none !important; }
 
 .progress-grid { display: grid; gap: 12px; }
+
+/* 並び替え行。↑↓ を一級の操作手段にし、PCではdragも使えるようにする。
+   drag が使えない環境(キーボード操作・スマホ)でも ↑↓ だけで完結する。 */
+.reorder-row { cursor: default; }
+.reorder-row[draggable="true"] .drag-handle { cursor: grab; }
+.reorder-row.drag-over { border-color: var(--gold); }
+.reorder-row.dragging { opacity: .5; }
+.drag-handle {
+  color: var(--muted);
+  user-select: none;
+  padding: 0 4px;
+}
+.order-buttons { display: flex; gap: 4px; }
+.order-buttons button {
+  padding: 6px 10px;
+  line-height: 1;
+  min-width: 2.5em;
+}
 .progress-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
 
 @media (max-width: 640px) {

@@ -9,6 +9,23 @@
   <a href="#" id="analysisLink" class="hidden" style="margin-left:12px;">結果分析へ</a>
 </p>
 
+{# ホスト兼任の採点者がいるときだけ表示する。コードを入力せず、Host sessionを
+   根拠にサーバー側が対象Scorerを決めて別タブで採点画面を開く。
+
+   通常のHTML formのPOST + target="_blank" にしてある。about:blankを開いて
+   JSからWindowProxy.locationを書き換える方式は、openerを切った時点で
+   ブラウザが遷移を許さずタブが真っ白なまま残ることがあるため使わない。
+   session設定とredirectはサーバー側で完結する。 #}
+<form id="openHostScoringForm"
+      class="hidden"
+      method="post"
+      target="_blank"
+      rel="noopener"
+      action="{{ url_for('pages.host_scoring_entry', project_id=project_id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" id="openHostScoringButton">採点画面を開く ↗</button>
+</form>
+
 <div id="draftNotice" class="panel hidden" style="border-color:var(--gold);">
   <h2>まだ採点は始まっていません(DRAFT)</h2>
   <p style="color:var(--muted)">被採点者・採点者・採点軸名の編集と、採点の開始はSettingsから行います。</p>
@@ -52,6 +69,19 @@
     この被採点者を締め切る
   </button>
   <a class="button" id="sequentialPresentLink" href="#" style="margin-left:12px;">結果発表画面へ</a>
+</section>
+
+{# RANDOM_DRAW のときだけ表示する。ここは履歴と進捗の表示のみで、
+   抽選の実行は /host/<id>/draw に一本化する。 #}
+<section class="panel hidden" id="drawSection">
+  <h2>発表順の抽選</h2>
+  <p id="drawProgressSummary" style="color:var(--muted)"></p>
+  <ol id="drawnList" class="progress-grid" style="margin:12px 0;"></ol>
+  <p id="drawNextPlaceholder" style="color:var(--muted)"></p>
+  <p id="drawLockWarning" class="hidden" style="color:var(--gold);"></p>
+  <a class="button primary" id="openDrawPageLink" href="#" target="_blank" rel="noopener">
+    抽選画面を開く ↗
+  </a>
 </section>
 
 <section class="panel" id="closeSection">

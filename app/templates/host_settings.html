@@ -2,10 +2,13 @@
 {% block title %}Host Settings - M1風採点アプリ{% endblock %}
 {% block content %}
 <div class="eyebrow">Host Settings</div>
+
+{# 状態を変えずにDashboardへ戻るための導線。単なるGET遷移で、保存も
+   状態遷移も行わない(「採点を開始する」とは完全に独立している)。 #}
+<p><a href="#" id="hostDashboardLink" class="hidden">&larr; ホストダッシュボードに戻る</a></p>
+
 <h1 id="projectNameHeading">プロジェクト設定</h1>
-<p>状態: <span id="projectStatusBadge" class="badge">-</span>
-  <a href="#" id="hostDashboardLink" class="hidden">Host Dashboardへ</a>
-</p>
+<p>状態: <span id="projectStatusBadge" class="badge">-</span></p>
 
 <section class="panel" id="draftOnlyNotice">
   <p style="color:var(--muted)">DRAFT状態の間のみ、プロジェクト構成(名前・被採点者・採点者・採点軸名)を編集できます。採点開始後は変更できません。</p>
@@ -23,7 +26,27 @@
 
 <section class="panel">
   <h2>被採点者</h2>
+
+  {# 発表順の決め方。DRAFT中のみ変更でき、サーバー側でも強制する。 #}
+  <div id="subjectOrderModeField" class="field hidden">
+    <label>発表順</label>
+    <label class="mode-option">
+      <input type="radio" name="subjectOrderMode" value="MANUAL">
+      手動で設定
+    </label>
+    <label class="mode-option">
+      <input type="radio" name="subjectOrderMode" value="RANDOM_DRAW">
+      ランダム抽選
+    </label>
+  </div>
+
+  {# 並び順が何に使われるかはモードで変わるので、JSが本文を差し込む #}
+  <p id="subjectOrderNote" style="color:var(--muted); font-size:.85rem;"></p>
   <div id="subjectRows" class="progress-grid"></div>
+  <p id="subjectOrderActions" class="hidden" style="margin-top:12px;">
+    <button type="button" id="saveSubjectOrderButton" class="primary">並び順を保存</button>
+    <span id="subjectOrderDirty" style="color:var(--gold); font-size:.85rem; margin-left:8px;"></span>
+  </p>
   <form id="addSubjectForm" style="margin-top:12px; display:flex; gap:8px;">
     <input type="text" id="newSubjectName" placeholder="新しい被採点者名">
     <button type="submit" id="addSubjectButton">追加</button>
@@ -37,11 +60,35 @@
 
 <section class="panel">
   <h2>採点者</h2>
+  <p style="color:var(--muted); font-size:.85rem;">
+    本番の座席順に並べ替えると、その順に得点が開示されます。
+  </p>
   <div id="scorerRows" class="progress-grid"></div>
+  <p id="scorerOrderActions" class="hidden" style="margin-top:12px;">
+    <button type="button" id="saveScorerOrderButton" class="primary">並び順を保存</button>
+    <span id="scorerOrderDirty" style="color:var(--gold); font-size:.85rem; margin-left:8px;"></span>
+  </p>
   <form id="addScorerForm" style="margin-top:12px; display:flex; gap:8px;">
     <input type="text" id="newScorerName" placeholder="新しい採点者名">
     <button type="submit" id="addScorerButton">追加</button>
   </form>
+
+  {# DRAFT中のみ。Host roleはScorerの属性なので、ここで動かすのはフラグだけで
+     採点者の追加・削除は行わない。 #}
+  <div id="hostScorerSection" class="hidden" style="margin-top:20px;">
+    <h3>ホスト自身も採点する</h3>
+    <p style="color:var(--muted); font-size:.9rem;">
+      ホストとして採点する人を、上の採点者の中から1人選びます。採点者は増えません。
+      「(なし)」を選ぶとホスト兼任を解除します。
+    </p>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <select id="hostScorerSelect"></select>
+      <button type="button" id="saveHostScorerButton">保存</button>
+    </div>
+    <p id="hostScorerEmptyNote" class="hidden" style="color:var(--muted); font-size:.85rem;">
+      採点者がまだ登録されていません。先に採点者を追加してください。
+    </p>
+  </div>
 </section>
 
 <section class="panel">

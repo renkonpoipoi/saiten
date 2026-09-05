@@ -28,6 +28,9 @@ PHASE8_MIGRATION = VERSIONS_DIR / "9c4e17a2b8d3_add_presentation_modes.py"
 
 INITIAL_REVISION = "b37d61517847"
 PHASE8_REVISION = "9c4e17a2b8d3"
+# `flask db upgrade` は常に head まで進む。Phase 10A-5 で
+# c1f7a04b9e26 (部分UNIQUE INDEX) が後続revisionとして追加された。
+HEAD_REVISION = "d5b81c37f0ae"
 
 # Neon本番へ適用済みのinitial migrationは、いかなる理由でも書き換えてはならない。
 # 変更されるとNeonのalembic_versionと実schemaの対応が崩れる。
@@ -88,11 +91,15 @@ def test_phase8_migration_follows_initial_migration():
     assert f"down_revision = '{INITIAL_REVISION}'" in source
 
 
-def test_only_two_migrations_exist():
+def test_migration_chain_is_append_only():
+    """migrationは後ろへ足すだけで、既存revisionを差し替えない。"""
     revisions = sorted(p.name for p in VERSIONS_DIR.glob("*.py"))
     assert revisions == [
         "9c4e17a2b8d3_add_presentation_modes.py",
         "b37d61517847_initial_schema.py",
+        # Phase 10A-5。検証は tests/test_phase10a_migration.py。
+        "c1f7a04b9e26_enforce_one_host_scorer_per_project.py",
+        "d5b81c37f0ae_add_ordering_and_draw_columns.py",
     ]
 
 
@@ -142,7 +149,7 @@ def test_sqlite_upgrade_from_empty_database(sqlite_url):
     conn = sqlite3.connect(path)
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        assert version == PHASE8_REVISION
+        assert version == HEAD_REVISION
 
         project_cols = {row[1] for row in conn.execute("PRAGMA table_info(projects)")}
         assert "presentation_mode" in project_cols
@@ -232,7 +239,7 @@ def test_existing_pre_phase8_rows_survive_and_default_to_batch(sqlite_url):
     try:
         assert (
             conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-            == PHASE8_REVISION
+            == HEAD_REVISION
         )
         rows = conn.execute(
             "SELECT id, name, status, presentation_mode FROM projects"

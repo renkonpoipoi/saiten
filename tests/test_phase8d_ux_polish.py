@@ -297,19 +297,27 @@ def test_batch_presentation_has_no_sequential_panels_shown(client, app, db):
 def test_create_page_has_bulk_copy_button(client, db):
     html = client.get("/projects/new").get_data(as_text=True)
     assert 'id="copyAllScorerCodesButton"' in html
-    assert "参加者コードを一括コピー" in html
+    assert "参加者用の採点者コードを一括コピー" in html
+    # 除外対象はホスト兼任の有無で変わるため、説明文はJSが差し込む
+    assert 'id="bulkCopyNote"' in html
 
 
-def test_bulk_copy_text_contains_every_scorer_name_and_code():
+def test_bulk_copy_text_contains_every_participant_scorer():
+    """Phase 10A: 参加者へ配布する採点者だけを1行ずつ並べる。
+
+    Phase 8Dでは全Scorerを対象にしていたが、Phase 10Aでホスト兼任の採点者を
+    除外するようになった(本人が使うコードであり配布対象ではないため)。
+    """
     js = (JS_DIR / "project_create.js").read_text(encoding="utf-8")
     build = re.search(
         r"function buildScorerCodeText\(scorers\) \{(.*?)\n  \}", js, re.S
     )
     assert build, "buildScorerCodeTextが見つからない"
     body = build.group(1)
-    # 全件を display_name: code の1行ずつに変換する
-    assert "scorers.map(" in body
-    assert "scorerLabel(scorer)" in body
+    # ホスト兼任だけを除き、残りを display_name: code の1行ずつに変換する
+    assert "!scorer.is_host_scorer" in body
+    assert ".map(" in body
+    assert "scorer.display_name" in body
     assert "scorer.code" in body
     assert '.join("\\n")' in body
 
@@ -551,15 +559,18 @@ def test_scorer_dashboard_project_status_across_lifecycle(client, app, db):
 # ---------------------------------------------------------------------------
 
 
-def test_reveal_engine_is_untouched():
-    """演出のタイミング・running total・カード配置はPhase 9まで変更しない。"""
+def test_reveal_engine_was_rebuilt_in_phase9():
+    """Phase 8Dのスコープ境界ガードをPhase 9の仕様へ差し替えたもの。
+
+    Phase 8Dでは「演出を変更していないこと」を証明するために running total と
+    暫定カード配置の存在を検証していた。Phase 9ではその running total 廃止が
+    P0仕様なので、逆に「無いこと」を検証する。
+    Final RankingにRadar / 記述回答を統合しない方針は引き続き維持する。
+    """
     js = _presentation_js()
-    assert js.count("async function revealSubject(") == 1
-    assert "let runningTotal = 0;" in js
-    assert "await wait(500);" in js
-    assert "await wait(700);" in js
-    assert "judge-score-bubble" in js
-    # Final RankingにRadar / Feedbackを統合していない
+    assert "runningTotal" not in js, "running total は Phase 9 で完全廃止した"
+    assert "judge-score-bubble" not in js, "旧カード配置は撤去した"
+    assert js.count("async function revealSubjectSequence(") == 1
     assert "radar" not in js.lower()
     assert "feedback" not in js.lower()
 
@@ -570,4 +581,8 @@ def test_no_new_migrations_were_added():
     assert revisions == [
         "9c4e17a2b8d3_add_presentation_modes.py",
         "b37d61517847_initial_schema.py",
+        # Phase 10A-5 で追加した部分UNIQUE INDEX(expand-only)。
+        # 検証は tests/test_phase10a_migration.py で行う。
+        "c1f7a04b9e26_enforce_one_host_scorer_per_project.py",
+        "d5b81c37f0ae_add_ordering_and_draw_columns.py",
     ], revisions

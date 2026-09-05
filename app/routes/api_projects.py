@@ -5,7 +5,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request, session
 
 from app.auth.decorators import require_host
-from app.errors import NotFoundError
+from app.errors import NotFoundError, ValidationError
 from app.extensions import db, limiter
 from app.models import Criterion, Project, Scorer, Subject
 from app.services import project_service
@@ -49,12 +49,18 @@ def _get_criterion_or_404(criterion_id: int) -> Criterion:
 def _serialize_project_detail(project: Project) -> dict:
     subjects = Subject.query.filter_by(project_id=project.id).order_by(Subject.sort_order).all()
     criteria = Criterion.query.filter_by(project_id=project.id).order_by(Criterion.sort_order).all()
-    scorers = Scorer.query.filter_by(project_id=project.id).order_by(Scorer.id).all()
+    scorers = (
+        Scorer.query.filter_by(project_id=project.id)
+        .order_by(Scorer.sort_order, Scorer.id)
+        .all()
+    )
     return {
         "id": project.id,
         "name": project.name,
         "status": project.status,
         "allow_host_scoring": project.allow_host_scoring,
+        # 発表順の決め方。draw_order(秘密順)はここでは絶対に返さない。
+        "subject_order_mode": project.subject_order_mode,
         "subjects": [{"id": s.id, "name": s.name, "sort_order": s.sort_order} for s in subjects],
         "criteria": [
             {"id": c.id, "name": c.name, "max_score": c.max_score, "sort_order": c.sort_order}
@@ -83,6 +89,9 @@ def create_project():
         criterion_names=data.get("criteria") or [],
         allow_host_scoring=bool(data.get("allow_host_scoring")),
         presentation_mode=data.get("presentation_mode") or "BATCH",
+        # allow_host_scoringがTrueのとき、入力済みScorerのうち誰がHostを兼ねるかを
+        # 指すindex(空文字除去後のscorers配列基準)。検証はservice側で行う。
+        host_scorer_index=data.get("host_scorer_index"),
     )
     project = result["project"]
 
@@ -180,6 +189,82 @@ def delete_scorer(project_id: int, scorer_id: int):
     scorer = _get_scorer_or_404(scorer_id)
     project_service.delete_scorer(project, scorer)
     return "", 204
+
+
+@api_projects_bp.post("/projects/<int:project_id>/draw-next-subject")
+@require_host
+def draw_next_subject(project_id: int):
+    """次の発表者を1組だけ公開する(RANDOM_DRAW / SCORING 中のみ)。
+
+    expected_cursor は権限情報ではなく compare-and-swap の照合値。
+    任意の値を送っても未来のdrawを消費できない(判定順は service 側を参照)。
+    レスポンスには今回公開した1件しか含めない。
+    """
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    return jsonify(
+        project_service.draw_next_subject(project, data.get("expected_cursor"))
+    )
+
+
+@api_projects_bp.patch("/projects/<int:project_id>/subject-order-mode")
+@require_host
+def set_subject_order_mode(project_id: int):
+    """発表順の決め方(MANUAL / RANDOM_DRAW)を切り替える(DRAFT限定)。"""
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    project_service.set_subject_order_mode(project, data.get("subject_order_mode"))
+    return jsonify(_serialize_project_detail(project))
+
+
+@api_projects_bp.patch("/projects/<int:project_id>/subjects/order")
+@require_host
+def reorder_subjects(project_id: int):
+    """被採点者の並び順を一括保存する(DRAFT限定)。
+
+    1件ずつのswapではなく全体の順序を1リクエストで受け取る。
+    subjectsには UNIQUE(project_id, sort_order) があるため、service側が
+    2段階代入(退避 -> flush -> 0..N-1)で衝突を避ける。
+    """
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    project_service.reorder_subjects(project, data.get("subject_ids"))
+    return jsonify(_serialize_project_detail(project))
+
+
+@api_projects_bp.patch("/projects/<int:project_id>/scorers/order")
+@require_host
+def reorder_scorers(project_id: int):
+    """採点者の並び順(座席順)を一括保存する(DRAFT限定)。"""
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    project_service.reorder_scorers(project, data.get("scorer_ids"))
+    return jsonify(_serialize_project_detail(project))
+
+
+@api_projects_bp.patch("/projects/<int:project_id>/host-scorer")
+@require_host
+def set_host_scorer(project_id: int):
+    """DRAFT中にHost兼任のScorerを付け替える(scorer_id: null で解除)。
+
+    Host roleはScorerの属性なので、ここで行うのはフラグの移動だけ。
+    Scorerの追加・削除は一切行わない。旧方式で作られたProjectに残っている
+    「ホスト」という名前のScorerも、ここでは自動削除しない
+    (「ホスト」という名前の正規のScorerである可能性を否定できないため)。
+    不要なScorerの削除は従来どおりDRAFT編集の明示操作で行う。
+    """
+    project = _get_project_or_404(project_id)
+    data = request.get_json(silent=True) or {}
+    raw_id = data.get("scorer_id")
+
+    scorer = None
+    if raw_id is not None:
+        if isinstance(raw_id, bool) or not isinstance(raw_id, int):
+            raise ValidationError("scorer_id must be an integer or null.")
+        scorer = _get_scorer_or_404(raw_id)
+
+    project_service.set_host_scorer(project, scorer)
+    return jsonify(_serialize_project_detail(project))
 
 
 @api_projects_bp.post("/projects/<int:project_id>/scorers/<int:scorer_id>/regenerate-code")

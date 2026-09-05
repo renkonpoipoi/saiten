@@ -64,12 +64,19 @@ def test_create_project_requires_exactly_five_criteria(client):
     assert "5" in resp.get_json()["error"] or "criteria" in resp.get_json()["error"].lower()
 
 
-def test_create_project_with_allow_host_scoring_adds_host_scorer(client, db):
-    payload = dict(VALID_PAYLOAD, allow_host_scoring=True)
+def test_create_project_with_allow_host_scoring_does_not_add_an_extra_scorer(client, db):
+    """Phase 10A: Host roleはScorerの属性であって別人格ではない。
+
+    Phase 9以前は「ホスト」という名前のScorerを1人追加していたため、
+    入力2名に対してScorerが3人になっていた。Phase 10Aでは入力済みScorerの
+    1人にis_host_scorerを立てるだけで、人数は増やさない。
+    """
+    payload = dict(VALID_PAYLOAD, allow_host_scoring=True, host_scorer_index=0)
     data = _create_project(client, payload)
     scorers = Scorer.query.filter_by(project_id=data["project_id"]).all()
-    assert len(scorers) == 3
+    assert len(scorers) == len(VALID_PAYLOAD["scorers"])
     assert sum(1 for s in scorers if s.is_host_scorer) == 1
+    assert "ホスト" not in [s.display_name for s in scorers]
 
 
 def test_create_project_requires_name(client):
