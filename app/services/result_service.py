@@ -103,14 +103,33 @@ def _competition_rank(sorted_results: list[dict]) -> None:
         previous_total = result["total_score"]
 
 
+def _event_order(project: Project, subject: Subject) -> int:
+    """本番の進行順(0始まり)。
+
+    RANDOM_DRAWでは抽選順(draw_order)、MANUALでは表示順(sort_order)。
+    RANDOM_DRAWで全件抽選する前にLOCKEDへ進めないよう transition_to_locked が
+    守っているため、この値が返る場面では draw_order は必ず公開済みになっている。
+    (抽選前に漏れないよう、これを含めるのは発表可能な範囲のendpointだけ)
+    """
+    if project.subject_order_mode == "RANDOM_DRAW" and subject.draw_order is not None:
+        return subject.draw_order
+    return subject.sort_order
+
+
 def _build_subject_row(
     project: Project,
     subject: Subject,
     criteria: list[Criterion],
     index: _ScoreIndex,
     official_ids: set[int],
+    *,
+    with_event_order: bool = False,
 ) -> dict:
-    """1 Subjectの公式集計結果を組み立てる。公式対象外のScorerは加算しない。"""
+    """1 Subjectの公式集計結果を組み立てる。公式対象外のScorerは加算しない。
+
+    with_event_order は **発表順を出してよいendpointだけ** がTrueにする
+    (result-summary / interim-ranking / subjects/<id>/result)。
+    """
     official_eval_ids = [
         eval_id
         for eval_id in index.eval_ids_by_subject.get(subject.id, [])
@@ -145,7 +164,7 @@ def _build_subject_row(
         for c in criteria
     ]
 
-    return {
+    row = {
         "id": subject.id,
         "name": subject.name,
         "sort_order": subject.sort_order,
@@ -156,6 +175,9 @@ def _build_subject_row(
         "criterion_averages": criterion_averages,
         "judge_totals": judge_totals,
     }
+    if with_event_order:
+        row["event_order"] = _event_order(project, subject)
+    return row
 
 
 def _project_criteria(project: Project) -> list[Criterion]:
@@ -185,7 +207,9 @@ def build_result_summary(project: Project) -> dict:
     index = _load_score_index(project)
 
     subject_results = [
-        _build_subject_row(project, subject, criteria, index, official_ids)
+        _build_subject_row(
+            project, subject, criteria, index, official_ids, with_event_order=True
+        )
         for subject in subjects
     ]
 
@@ -234,7 +258,9 @@ def build_subject_result(project: Project, subject: Subject) -> dict:
         ],
         "theoretical_max_total": sum(c.max_score for c in criteria),
         "official_scorer_count": len(official_ids),
-        "subject": _build_subject_row(project, subject, criteria, index, official_ids),
+        "subject": _build_subject_row(
+            project, subject, criteria, index, official_ids, with_event_order=True
+        ),
     }
 
 
@@ -266,7 +292,9 @@ def build_interim_ranking(project: Project) -> dict:
         if subject_presentation_status(project, subject) in REVEALABLE_SUBJECT_STATUSES
     ]
     subject_results = [
-        _build_subject_row(project, subject, criteria, index, official_ids)
+        _build_subject_row(
+            project, subject, criteria, index, official_ids, with_event_order=True
+        )
         for subject in revealable
     ]
 

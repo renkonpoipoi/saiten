@@ -249,8 +249,10 @@
   let batchOrder = [];
   let batchIndex = 0;
 
+  // 得点発表の順番は server の event_order に従う。RANDOM_DRAWでは抽選順、
+  // MANUALでは Host が設定画面で並べた順になる(clientは順番を決めない)。
   function orderedSubjects(summary) {
-    return [...summary.subjects].sort((a, b) => a.sort_order - b.sort_order);
+    return core.orderByEvent(summary.subjects);
   }
 
   function isLastBatchSubject() {

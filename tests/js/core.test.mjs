@@ -416,3 +416,51 @@ test("remainingCandidates tolerates missing arguments", () => {
   assert.deepEqual(core.remainingCandidates(), []);
   assert.deepEqual(core.remainingCandidates(["A"], undefined), ["A"]);
 });
+
+/* --------------------------------------------------------------------------
+   Phase 10B: 本番の進行順 (event_order)
+   -------------------------------------------------------------------------- */
+
+test("eventOrder prefers the server supplied event_order", () => {
+  assert.equal(core.eventOrder({ event_order: 2, sort_order: 0 }), 2);
+});
+
+test("eventOrder falls back to sort_order when event_order is absent", () => {
+  assert.equal(core.eventOrder({ sort_order: 3 }), 3);
+  assert.equal(core.eventOrder({}), 0);
+  assert.equal(core.eventOrder(), 0);
+});
+
+test("eventOrder keeps a zero event_order instead of falling back", () => {
+  // 0 が falsy なので、素朴な || 実装だと1組目が最後尾へ飛ぶ
+  assert.equal(core.eventOrder({ event_order: 0, sort_order: 5 }), 0);
+});
+
+test("orderByEvent sorts by the draw order, not the display order", () => {
+  const subjects = [
+    { name: "A", sort_order: 0, event_order: 3 },
+    { name: "B", sort_order: 1, event_order: 0 },
+    { name: "C", sort_order: 2, event_order: 2 },
+    { name: "D", sort_order: 3, event_order: 1 },
+  ];
+  assert.deepEqual(core.orderByEvent(subjects).map((s) => s.name), ["B", "D", "C", "A"]);
+});
+
+test("orderByEvent leaves the input array untouched", () => {
+  const subjects = [{ name: "A", event_order: 1 }, { name: "B", event_order: 0 }];
+  core.orderByEvent(subjects);
+  assert.deepEqual(subjects.map((s) => s.name), ["A", "B"]);
+});
+
+test("orderByEvent falls back to sort_order for manual projects", () => {
+  const subjects = [
+    { name: "B", sort_order: 1 },
+    { name: "A", sort_order: 0 },
+  ];
+  assert.deepEqual(core.orderByEvent(subjects).map((s) => s.name), ["A", "B"]);
+});
+
+test("orderByEvent tolerates an empty or missing list", () => {
+  assert.deepEqual(core.orderByEvent([]), []);
+  assert.deepEqual(core.orderByEvent(), []);
+});

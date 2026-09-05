@@ -206,6 +206,21 @@
     return (allSubjects || []).filter(function (name) { return !drawn[name]; });
   }
 
+  /** 本番の進行順。server の event_order を唯一の根拠にし、
+   *  それが無い応答(旧clientキャッシュ等)だけ sort_order へ戻す。 */
+  function eventOrder(subject) {
+    if (subject && typeof subject.event_order === "number") return subject.event_order;
+    if (subject && typeof subject.sort_order === "number") return subject.sort_order;
+    return 0;
+  }
+
+  /** Subject配列を本番の進行順に並べ替える(元配列は変更しない)。 */
+  function orderByEvent(subjects) {
+    return (subjects || []).slice().sort(function (a, b) {
+      return eventOrder(a) - eventOrder(b);
+    });
+  }
+
   /** step配列の総尺(ms)。テストと運用尺の見積りに使う。 */
   function totalDuration(steps) {
     return (steps || []).reduce(function (sum, step) { return sum + step.duration; }, 0);
@@ -314,6 +329,8 @@
     buildDrawSteps: buildDrawSteps,
     drawSpinIntervals: drawSpinIntervals,
     remainingCandidates: remainingCandidates,
+    eventOrder: eventOrder,
+    orderByEvent: orderByEvent,
     totalDuration: totalDuration,
     railLayout: railLayout,
     toRankGroups: toRankGroups,
