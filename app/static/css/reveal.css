@@ -40,6 +40,10 @@
   --p-red: #7d111b;
   --p-red-hi: #a71924;
 
+  /* Silver は中立〜やや白銀。青に振らない(BLACK/GOLD/RED/IVORY と喧嘩するため) */
+  --p-silver: #cfd2cc;
+  --p-silver-hi: #eef0ea;
+
   --p-ivory: #f6f0df;
   --p-sub: #a49c8c;
   --p-line: rgba(214, 179, 90, .28);
@@ -223,6 +227,58 @@
 }
 
 /* ---------------------------------------------------------------------------
+   4b. Judge score tier (Phase 9E)
+
+   意味を持たせるのは主として **score number**。カード全体を Silver / Gold で
+   塗りつぶさない。STANDARD は「通常表示」であり、negative な色・動きは持たせない
+   (赤い警告色・shake・buzzer の類は一切割り当てない)。
+   強さの序列: STANDARD < SILVER < GOLD < PREMIUM < TOTAL < WINNER。
+   --------------------------------------------------------------------------- */
+.p-active[data-state="revealed"][data-tier="standard"] .p-active__score {
+  color: var(--p-ivory);
+  /* Glow は極めて弱い。通常表示であることを崩さない */
+  text-shadow: 0 0 calc(var(--u) * 1.2) rgba(246, 240, 223, .22);
+}
+
+.p-active[data-state="revealed"][data-tier="silver"] .p-active__score {
+  color: var(--p-silver-hi);
+  text-shadow: 0 0 calc(var(--u) * 2.2) rgba(207, 210, 204, .45);
+}
+
+.p-active[data-tier="silver"] {
+  border-color: rgba(207, 210, 204, .45);
+}
+
+.p-active[data-state="revealed"][data-tier="gold"] .p-active__score {
+  color: var(--p-gold);
+  text-shadow: 0 0 calc(var(--u) * 3) rgba(214, 179, 90, .6);
+}
+
+.p-active[data-tier="gold"] {
+  border-color: var(--p-gold-dim);
+}
+
+.p-active[data-state="revealed"][data-tier="premium"] .p-active__score {
+  color: var(--p-gold-hi);
+  text-shadow:
+    0 0 calc(var(--u) * 3.6) rgba(243, 215, 122, .75),
+    0 0 calc(var(--u) * 7) rgba(243, 215, 122, .3);
+}
+
+/* PREMIUM だけ、Reveal の瞬間に Deep Red の halo をごく薄く重ねる。
+   カード自体は黒のまま(金色に塗りつぶさない)。 */
+.p-active[data-tier="premium"] {
+  border-color: var(--p-gold);
+}
+
+.p-active[data-state="revealed"][data-tier="premium"] {
+  box-shadow:
+    inset 0 1px 0 rgba(243, 215, 122, .18),
+    0 calc(var(--u) * 1.4) calc(var(--u) * 3) rgba(0, 0, 0, .6),
+    0 0 calc(var(--u) * 6) rgba(125, 17, 27, .35);
+}
+
+/* ---------------------------------------------------------------------------
    5. TOTAL
    Judge score とはサイズ・枠・色・背後の赤で明確に格を変える。
    --------------------------------------------------------------------------- */
@@ -326,6 +382,19 @@
 .p-slot[data-state="revealed"] .p-slot__score {
   color: var(--p-ivory);
 }
+
+/* settle 後の rail。**Glowはほぼ消し、数字の色で tier を残す**。
+   「誰が高く評価していたか」が全Judge開示後にも一目で分かるようにするため
+   (司会がそのJudgeへ質問を振る、という使い方を想定している)。
+   採点者名は原則 neutral のままで、カード全体は黒い rail を維持する。 */
+.p-slot[data-state="revealed"][data-tier="silver"] .p-slot__score { color: var(--p-silver-hi); }
+.p-slot[data-state="revealed"][data-tier="gold"] .p-slot__score { color: var(--p-gold); }
+.p-slot[data-state="revealed"][data-tier="premium"] .p-slot__score { color: var(--p-gold-hi); }
+
+/* 細い accent だけ。box-shadow による glow は足さない。 */
+.p-slot[data-state="revealed"][data-tier="silver"] { border-color: rgba(207, 210, 204, .3); }
+.p-slot[data-state="revealed"][data-tier="gold"] { border-color: rgba(214, 179, 90, .42); }
+.p-slot[data-state="revealed"][data-tier="premium"] { border-color: rgba(243, 215, 122, .55); }
 
 .p-slot__name {
   margin-top: calc(var(--u) * .25);

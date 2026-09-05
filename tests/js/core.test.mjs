@@ -464,3 +464,74 @@ test("orderByEvent tolerates an empty or missing list", () => {
   assert.deepEqual(core.orderByEvent([]), []);
   assert.deepEqual(core.orderByEvent(), []);
 });
+
+/* --------------------------------------------------------------------------
+   Phase 9E: Judge score tier
+   1採点者 = 100点満点固定。境界は 70 / 80 / 90 の3点だけ。
+   -------------------------------------------------------------------------- */
+
+test("scoreTier pins every boundary", () => {
+  const cases = [
+    [0, "standard"], [1, "standard"], [50, "standard"], [69, "standard"],
+    [70, "silver"], [75, "silver"], [79, "silver"],
+    [80, "gold"], [85, "gold"], [89, "gold"],
+    [90, "premium"], [95, "premium"], [100, "premium"],
+  ];
+  for (const [score, tier] of cases) {
+    assert.equal(core.scoreTier(score), tier, `score=${score}`);
+  }
+});
+
+test("scoreTier never returns a negative or failure tier", () => {
+  // 低得点は「通常表示」であって「悪い得点」ではない
+  assert.deepEqual(core.SCORE_TIERS, ["standard", "silver", "gold", "premium"]);
+  for (let score = 0; score <= 100; score += 1) {
+    assert.ok(core.SCORE_TIERS.includes(core.scoreTier(score)), `score=${score}`);
+  }
+});
+
+test("scoreTier is monotonically non-decreasing", () => {
+  let previous = 0;
+  for (let score = 0; score <= 100; score += 1) {
+    const index = core.SCORE_TIERS.indexOf(core.scoreTier(score));
+    assert.ok(index >= previous, `score=${score}`);
+    previous = index;
+  }
+});
+
+test("scoreTier falls back to standard for unusable values", () => {
+  for (const value of [undefined, null, NaN, "", "abc", {}, Infinity, -Infinity]) {
+    assert.equal(core.scoreTier(value), "standard", String(value));
+  }
+});
+
+test("scoreTier treats a numeric string like the number", () => {
+  assert.equal(core.scoreTier("90"), "premium");
+  assert.equal(core.scoreTier("69"), "standard");
+});
+
+test("scoreTier does not use percentages or a judge count", () => {
+  // 「1採点者 = 100点満点固定」。得点率への変換は行わない
+  assert.equal(core.scoreTier.length, 1);
+  assert.equal(core.scoreTier(70), "silver");
+});
+
+test("judgeCue maps each tier to its own cue", () => {
+  assert.equal(core.judgeCue(12), "judgeStandard");
+  assert.equal(core.judgeCue(70), "judgeSilver");
+  assert.equal(core.judgeCue(80), "judgeGold");
+  assert.equal(core.judgeCue(100), "judgePremium");
+  assert.deepEqual(
+    Object.values(core.JUDGE_CUES),
+    ["judgeStandard", "judgeSilver", "judgeGold", "judgePremium"]
+  );
+});
+
+test("judgeCue never returns the total or winner cue", () => {
+  for (let score = 0; score <= 100; score += 1) {
+    const cue = core.judgeCue(score);
+    assert.ok(cue.startsWith("judge"), `${score} -> ${cue}`);
+    assert.notEqual(cue, "totalSting");
+    assert.notEqual(cue, "winnerSting");
+  }
+});

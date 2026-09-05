@@ -223,6 +223,49 @@
     });
   }
 
+  /* -------------------------------------------------------------------------
+     Judge score tier (Phase 9E)
+
+     **1採点者 = 100点満点固定**。percentage変換も、criteria max_score 合計に
+     よる動的thresholdも行わない(採点仕様には一切触れない)。
+     境界は 70 / 80 / 90 の3点だけ。
+
+     STANDARD は「悪い得点」ではなく通常表示。下位側に negative な演出
+     (赤い警告色・buzzer・shake等)を割り当ててはならない。高得点側だけを
+     上方向へ強めるための段階分けである。
+     ------------------------------------------------------------------------- */
+  var SCORE_TIERS = ["standard", "silver", "gold", "premium"];
+
+  // 上から順に評価する。境界値はその tier に含める(70 は SILVER)。
+  var TIER_THRESHOLDS = [
+    { tier: "premium", min: 90 },
+    { tier: "gold", min: 80 },
+    { tier: "silver", min: 70 }
+  ];
+
+  // tier -> Judge の効果音キー。TOTAL / Winner は得点に依存しない別系統。
+  var JUDGE_CUES = {
+    standard: "judgeStandard",
+    silver: "judgeSilver",
+    gold: "judgeGold",
+    premium: "judgePremium"
+  };
+
+  /** 採点者1人がその被採点者へ付けた合計点(0〜100)から tier を決める。 */
+  function scoreTier(score) {
+    var value = Number(score);
+    if (!isFinite(value)) return "standard";
+    for (var i = 0; i < TIER_THRESHOLDS.length; i += 1) {
+      if (value >= TIER_THRESHOLDS[i].min) return TIER_THRESHOLDS[i].tier;
+    }
+    return "standard";
+  }
+
+  /** その得点で鳴らす Judge の cue。TOTAL には絶対に使わない。 */
+  function judgeCue(score) {
+    return JUDGE_CUES[scoreTier(score)];
+  }
+
   /** step配列の総尺(ms)。テストと運用尺の見積りに使う。 */
   function totalDuration(steps) {
     return (steps || []).reduce(function (sum, step) { return sum + step.duration; }, 0);
@@ -332,6 +375,10 @@
     drawSpinIntervals: drawSpinIntervals,
     remainingCandidates: remainingCandidates,
     eventOrder: eventOrder,
+    SCORE_TIERS: SCORE_TIERS,
+    JUDGE_CUES: JUDGE_CUES,
+    scoreTier: scoreTier,
+    judgeCue: judgeCue,
     orderByEvent: orderByEvent,
     totalDuration: totalDuration,
     railLayout: railLayout,

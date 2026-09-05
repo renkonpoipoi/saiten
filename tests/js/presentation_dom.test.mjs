@@ -212,3 +212,100 @@ test("hiding the incoming card clears the inline move transform", () => {
   assert.equal(r.incomingCard.style.transition, "");
   assert.equal(r.incomingCard.dataset.state, "idle");
 });
+
+/* --------------------------------------------------------------------------
+   Judge score tier: 中央Reveal と settle後のrail
+   -------------------------------------------------------------------------- */
+
+const JUDGES = [
+  { scorer_id: 1, display_name: "田中", total: 68 },
+  { scorer_id: 2, display_name: "吉田", total: 76 },
+  { scorer_id: 3, display_name: "佐藤", total: 84 },
+  { scorer_id: 4, display_name: "鈴木", total: 93 },
+];
+
+const slotTiers = (r) => r.rail.children.map((slot) => slot.dataset.tier);
+const slotScores = (r) =>
+  r.rail.children.map((slot) => slot.querySelector(".p-slot__score").textContent);
+
+test("the central card takes the tier at the moment the score is revealed", () => {
+  const r = refs();
+  stage.buildRail(r, JUDGES);
+  stage.enterJudge(r, JUDGES[3], 3);
+  assert.equal(r.activeCard.dataset.tier, undefined, "登場時点ではtierを持たない");
+
+  stage.revealJudgeScore(r, JUDGES[3]);
+  assert.equal(r.activeCard.dataset.tier, "premium");
+  assert.equal(r.activeCard.dataset.state, "revealed");
+  assert.equal(r.activeScore.textContent, "93");
+});
+
+test("every tier reaches the central card", () => {
+  const r = refs();
+  const expected = ["standard", "silver", "gold", "premium"];
+  JUDGES.forEach((judge, index) => {
+    stage.revealJudgeScore(r, judge);
+    assert.equal(r.activeCard.dataset.tier, expected[index], judge.display_name);
+  });
+});
+
+test("the tier stays on the rail after the judge settles", () => {
+  const r = refs();
+  stage.buildRail(r, JUDGES);
+  JUDGES.forEach((judge, index) => {
+    stage.revealJudgeScore(r, judge);
+    stage.settleJudge(r, judge, index);
+  });
+  assert.deepEqual(slotTiers(r), ["standard", "silver", "gold", "premium"]);
+  assert.deepEqual(slotScores(r), ["68", "76", "84", "93"]);
+});
+
+test("clearing the centre drops the tier but the rail keeps it", () => {
+  const r = refs();
+  stage.buildRail(r, JUDGES);
+  stage.revealJudgeScore(r, JUDGES[3]);
+  stage.settleJudge(r, JUDGES[3], 3);
+  stage.clearCenter(r);
+  assert.equal(r.activeCard.dataset.tier, undefined);
+  assert.equal(r.rail.children[3].dataset.tier, "premium");
+});
+
+test("the skip final state still carries every rail tier", () => {
+  const r = refs();
+  stage.showSubjectFinalState(r, { name: "チームA", total_score: 321 }, JUDGES);
+  assert.deepEqual(slotTiers(r), ["standard", "silver", "gold", "premium"]);
+  assert.equal(r.totalValue.textContent, "321");
+  assert.equal(r.activeCard.dataset.tier, undefined);
+});
+
+test("unrevealed rail slots carry no tier at all", () => {
+  const r = refs();
+  stage.buildRail(r, JUDGES);
+  assert.deepEqual(slotTiers(r), [undefined, undefined, undefined, undefined]);
+  assert.deepEqual(slotScores(r), ["—", "—", "—", "—"]);
+});
+
+/* --------------------------------------------------------------------------
+   TOTAL は得点に関係なく固定
+   -------------------------------------------------------------------------- */
+
+test("the total looks identical for a low and a high total", () => {
+  const low = refs();
+  const high = refs();
+  stage.revealTotal(low, 250);
+  stage.revealTotal(high, 450);
+  assert.equal(low.total.dataset.state, high.total.dataset.state);
+  assert.equal(low.total.dataset.tier, undefined);
+  assert.equal(high.total.dataset.tier, undefined);
+  assert.equal(low.totalValue.textContent, "250");
+  assert.equal(high.totalValue.textContent, "450");
+});
+
+test("the total never borrows a judge tier", () => {
+  const r = refs();
+  for (const total of [0, 69, 70, 90, 100, 194, 500]) {
+    stage.revealTotal(r, total);
+    assert.equal(r.total.dataset.tier, undefined, String(total));
+    assert.equal(r.total.dataset.state, "revealed");
+  }
+});

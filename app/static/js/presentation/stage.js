@@ -55,6 +55,9 @@
     var slot = railSlots(refs)[index];
     if (!slot) return;
     slot.dataset.state = "revealed";
+    // 全員のRevealが終わったあとも「誰が高く評価したか」がrailで分かるよう、
+    // tierはsettle後もここに残す(常時Glowはさせず、数字の色で示す)。
+    slot.dataset.tier = core.scoreTier(judge.total);
     var score = slot.querySelector(".p-slot__score");
     if (score) score.textContent = String(judge.total);
   }
@@ -81,15 +84,18 @@
     card.dataset.state = "idle";
     refs.activeName.textContent = judge.display_name;
     refs.activeScore.textContent = "";
+    // 点数が見えていない間はtierを持たせない(登場時に色が先走らないため)
+    delete card.dataset.tier;
     // 直前のsettleのtransitionをリセットしてから登場させる
     void card.offsetWidth;
     card.dataset.state = "enter";
     markSlot(refs, index, "active");
   }
 
-  /** 点数だけを後から出す。glowが点くのはこの瞬間だけ。 */
+  /** 点数だけを後から出す。tier色とglowが点くのはこの瞬間だけ。 */
   function revealJudgeScore(refs, judge) {
     refs.activeScore.textContent = String(judge.total);
+    refs.activeCard.dataset.tier = core.scoreTier(judge.total);
     refs.activeCard.dataset.state = "revealed";
   }
 
@@ -101,11 +107,16 @@
 
   function clearCenter(refs) {
     refs.activeCard.dataset.state = "idle";
+    delete refs.activeCard.dataset.tier;
     refs.activeName.textContent = "";
     refs.activeScore.textContent = "";
   }
 
-  /** TOTAL。全Judge開示後にのみ呼ばれる(running totalは存在しない)。 */
+  /** TOTAL。全Judge開示後にのみ呼ばれる(running totalは存在しない)。
+
+      **得点に関係なく常に同じ演出**。scoreTier も得点率もここでは使わない。
+      TOTAL は「格付けの場」ではなく「全Judge scoreが集約されたクライマックス」
+      なので、合計が低いという理由で演出を弱めない。 */
   function revealTotal(refs, totalScore) {
     refs.totalValue.textContent = String(totalScore);
     refs.total.dataset.state = "revealed";
